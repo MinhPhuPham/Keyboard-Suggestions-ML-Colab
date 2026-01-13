@@ -162,11 +162,13 @@ def download_swiftkey_direct(output_dir: str) -> bool:
     """
     try:
         import subprocess
+        import shutil
         
         print("Downloading SwiftKey corpus from Coursera CDN...")
         
         # Download to temp location
         zip_path = "/tmp/swiftkey.zip"
+        extract_path = "/tmp/swiftkey_extract"
         url = "https://d396qusza40orc.cloudfront.net/dsscapstone/dataset/Coursera-SwiftKey.zip"
         
         # Download
@@ -180,17 +182,33 @@ def download_swiftkey_direct(output_dir: str) -> bool:
         
         print("Extracting...")
         
-        # Extract
+        # Extract to temp directory
+        os.makedirs(extract_path, exist_ok=True)
         result = subprocess.run([
-            "unzip", "-q", zip_path, "-d", output_dir
+            "unzip", "-q", zip_path, "-d", extract_path
         ], capture_output=True, text=True)
         
         if result.returncode != 0:
             print(f"✗ Extraction failed: {result.stderr}")
             return False
         
+        # Move en_US files to output directory
+        en_us_path = os.path.join(extract_path, "final", "en_US")
+        if os.path.exists(en_us_path):
+            # Copy all files from en_US to output_dir
+            for filename in os.listdir(en_us_path):
+                src = os.path.join(en_us_path, filename)
+                dst = os.path.join(output_dir, filename)
+                shutil.copy2(src, dst)
+            print(f"✓ Copied {len(os.listdir(en_us_path))} files from en_US")
+        else:
+            print(f"⚠ en_US folder not found, copying all extracted files")
+            # Fallback: copy everything
+            shutil.copytree(extract_path, output_dir, dirs_exist_ok=True)
+        
         # Cleanup
         os.remove(zip_path)
+        shutil.rmtree(extract_path)
         
         print(f"✓ SwiftKey corpus downloaded to {output_dir}")
         return True

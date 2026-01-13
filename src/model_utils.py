@@ -34,7 +34,7 @@ def load_model_with_lora(
         lora_r: LoRA rank
         lora_alpha: LoRA alpha parameter
         lora_dropout: Dropout probability for LoRA layers
-        target_modules: List of module names to apply LoRA (default: q_proj, v_proj)
+        target_modules: List of module names to apply LoRA (auto-detected if None)
         
     Returns:
         Tuple of (model, tokenizer)
@@ -56,9 +56,23 @@ def load_model_with_lora(
         trust_remote_code=True
     )
     
-    # Configure LoRA
+    # Auto-detect target modules if not specified
     if target_modules is None:
-        target_modules = ["q_proj", "v_proj"]
+        # Check model architecture and set appropriate modules
+        model_type = model.config.model_type.lower()
+        
+        if "phi" in model_type or "phi3" in model_name.lower():
+            # Phi-3 uses: qkv_proj or o_proj
+            target_modules = ["qkv_proj", "o_proj"]
+            print(f"Detected Phi-3 model, using modules: {target_modules}")
+        elif "qwen" in model_type or "qwen" in model_name.lower():
+            # Qwen uses: c_attn or attn.c_proj
+            target_modules = ["c_attn", "c_proj"]
+            print(f"Detected Qwen model, using modules: {target_modules}")
+        else:
+            # Default for most models (LLaMA, Mistral, etc.)
+            target_modules = ["q_proj", "v_proj", "k_proj", "o_proj"]
+            print(f"Using default modules: {target_modules}")
     
     lora_config = LoraConfig(
         r=lora_r,
@@ -70,8 +84,16 @@ def load_model_with_lora(
     )
     
     # Add LoRA adapters
-    model = get_peft_model(model, lora_config)
-    model.print_trainable_parameters()
+    try:
+        model = get_peft_model(model, lora_config)
+        model.print_trainable_parameters()
+    except ValueError as e:
+        print(f"\n⚠ Error applying LoRA: {e}")
+        print("\nAvailable modules in model:")
+        for name, _ in model.named_modules():
+            if 'attn' in name.lower() or 'proj' in name.lower():
+                print(f"  - {name}")
+        raise
     
     return model, tokenizer
 
