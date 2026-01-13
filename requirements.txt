@@ -1,25 +1,23 @@
-# Core ML Frameworks
+# Core ML Libraries
 torch>=2.0.0
-transformers>=4.35.0
+transformers>=4.30.0
 datasets>=2.14.0
-accelerate>=0.24.0
+accelerate>=0.20.0
 
-# Model Optimization
-peft>=0.6.0
+# LoRA and Optimization
+peft>=0.4.0
 bitsandbytes>=0.41.0
 
 # Japanese NLP
-fugashi>=1.3.0
+fugashi>=1.2.0
 unidic>=1.1.0
-ipadic>=1.0.0
 
 # Tokenization
 sentencepiece>=0.1.99
-nltk>=3.8.1
 
 # Model Export
-onnx>=1.15.0
-onnxruntime>=1.16.0
+onnx>=1.14.0
+onnxruntime>=1.15.0
 coremltools>=7.0
 
 # Utilities
@@ -33,6 +31,9 @@ kaggle>=1.5.16
 # Environment Management
 python-dotenv>=1.0.0
 
-# Jupyter (for local notebook development)
-jupyter>=1.0.0
-ipykernel>=6.25.0
+# Note: The following packages are pre-installed in Colab
+# and may show version conflicts (these are warnings, not errors):
+# - ipykernel (Colab uses 6.17.1)
+# - jupyter-client (Colab uses <8.0)
+# - notebook (Colab uses <7.0)
+# These conflicts are safe to ignore in Colab.
