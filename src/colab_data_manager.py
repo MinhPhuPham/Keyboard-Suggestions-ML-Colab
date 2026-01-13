@@ -98,7 +98,7 @@ def download_file(url: str, output_path: str, description: str = "Downloading") 
 
 def download_swiftkey_corpus(output_dir: str) -> bool:
     """
-    Download SwiftKey corpus from Kaggle.
+    Download SwiftKey corpus from Kaggle or direct URL.
     
     Args:
         output_dir: Directory to save dataset
@@ -112,15 +112,20 @@ def download_swiftkey_corpus(output_dir: str) -> bool:
     print("Attempting to download SwiftKey corpus from Kaggle...")
     
     try:
-        # Check if Kaggle API is configured
-        kaggle_json = "/root/.kaggle/kaggle.json"
-        if not os.path.exists(kaggle_json):
-            print("⚠ Kaggle API not configured. Please set up Kaggle credentials.")
-            print("Instructions:")
-            print("1. Go to https://www.kaggle.com/settings")
-            print("2. Create new API token")
-            print("3. Upload kaggle.json to Colab")
-            return False
+        # Check if Kaggle API is configured (either method)
+        kaggle_json = os.path.expanduser("~/.kaggle/kaggle.json")
+        kaggle_token = os.environ.get('KAGGLE_API_TOKEN')
+        
+        if not os.path.exists(kaggle_json) and not kaggle_token:
+            print("⚠ Kaggle API not configured.")
+            print("\nOption 1: Set up Kaggle API with environment variable (new method)")
+            print("  1. Go to https://www.kaggle.com/settings")
+            print("  2. Create new API token → Copy the token")
+            print("  3. In Colab, run:")
+            print("     import os")
+            print("     os.environ['KAGGLE_API_TOKEN'] = 'your_token_here'")
+            print("\nOption 2: Using direct download instead...")
+            return download_swiftkey_direct(output_dir)
         
         # Download using Kaggle API
         import subprocess
@@ -135,11 +140,63 @@ def download_swiftkey_corpus(output_dir: str) -> bool:
             print(f"✓ SwiftKey corpus downloaded to {output_dir}")
             return True
         else:
-            print(f"✗ Kaggle download failed: {result.stderr}")
-            return False
+            print(f"⚠ Kaggle download failed: {result.stderr}")
+            print("Trying direct download...")
+            return download_swiftkey_direct(output_dir)
             
     except Exception as e:
-        print(f"✗ Error downloading SwiftKey corpus: {e}")
+        print(f"⚠ Kaggle download error: {e}")
+        print("Trying direct download...")
+        return download_swiftkey_direct(output_dir)
+
+
+def download_swiftkey_direct(output_dir: str) -> bool:
+    """
+    Download SwiftKey corpus directly from Coursera CDN.
+    
+    Args:
+        output_dir: Directory to save dataset
+        
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        import subprocess
+        
+        print("Downloading SwiftKey corpus from Coursera CDN...")
+        
+        # Download to temp location
+        zip_path = "/tmp/swiftkey.zip"
+        url = "https://d396qusza40orc.cloudfront.net/dsscapstone/dataset/Coursera-SwiftKey.zip"
+        
+        # Download
+        result = subprocess.run([
+            "wget", "-O", zip_path, url
+        ], capture_output=True, text=True)
+        
+        if result.returncode != 0:
+            print(f"✗ Download failed: {result.stderr}")
+            return False
+        
+        print("Extracting...")
+        
+        # Extract
+        result = subprocess.run([
+            "unzip", "-q", zip_path, "-d", output_dir
+        ], capture_output=True, text=True)
+        
+        if result.returncode != 0:
+            print(f"✗ Extraction failed: {result.stderr}")
+            return False
+        
+        # Cleanup
+        os.remove(zip_path)
+        
+        print(f"✓ SwiftKey corpus downloaded to {output_dir}")
+        return True
+        
+    except Exception as e:
+        print(f"✗ Direct download failed: {e}")
         return False
 
 

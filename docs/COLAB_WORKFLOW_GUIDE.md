@@ -218,6 +218,62 @@ The first cells in each notebook will:
 
 **Run these cells first** (Shift+Enter or click play button)
 
+#### Step 2.5: Kaggle API Setup (Optional for English Dataset)
+
+The English training notebook downloads the SwiftKey corpus. The system has **automatic fallback**:
+- **Primary**: Kaggle API (faster, if configured)
+- **Fallback**: Direct download from Coursera CDN (automatic, no setup needed)
+
+**Option 1: Skip Setup (Recommended for First Run)**
+
+Just run the data setup cell - it will automatically download from Coursera CDN:
+
+```python
+# This will work without any Kaggle setup
+data_path = setup_english_data(DRIVE_BASE)
+```
+
+You'll see:
+```
+⚠ Kaggle API not configured.
+Option 2: Using direct download instead...
+Downloading SwiftKey corpus from Coursera CDN...
+✓ SwiftKey corpus downloaded
+```
+
+**Option 2: Set Up Kaggle API (For Faster Downloads)**
+
+If you want faster downloads and access to more Kaggle datasets:
+
+1. **Get API Token**:
+   - Go to [kaggle.com/settings](https://www.kaggle.com/settings)
+   - Scroll to "API" section
+   - Click "Create New API Token"
+   - **Copy the token** (Kaggle now uses environment variables instead of files)
+
+2. **Set Environment Variable in Colab** (add this cell before data setup):
+
+```python
+# Set Kaggle API token
+import os
+
+# Replace 'your_token_here' with your actual token from Kaggle
+os.environ['KAGGLE_API_TOKEN'] = 'your_token_here'
+
+print("✓ Kaggle API configured!")
+
+# Verify
+!kaggle datasets list --page-size 1
+```
+
+3. **Re-run data setup** - it will now use Kaggle API
+
+> [!NOTE]
+> Kaggle recently changed from using `kaggle.json` files to environment variables. Just copy your token and set it as shown above!
+
+> [!NOTE]
+> The automatic fallback means you never need to set up Kaggle API unless you want faster downloads. The direct download works perfectly fine!
+
 #### Step 3: Run Data Preparation
 
 ```python
@@ -471,6 +527,36 @@ git pull           # Get remote changes
 git stash pop      # Reapply local changes
 # Resolve conflicts manually
 ```
+
+### Issue: Kaggle API errors or slow downloads
+
+**Solution**:
+The notebooks have automatic fallback to direct download. If you see Kaggle errors, just let it continue:
+
+```
+⚠ Kaggle API not configured.
+Option 2: Using direct download instead...
+Downloading SwiftKey corpus from Coursera CDN...
+```
+
+This is normal and will work fine!
+
+**To set up Kaggle API** (optional):
+1. Get token from [kaggle.com/settings](https://www.kaggle.com/settings)
+2. Set environment variable in Colab:
+```python
+import os
+os.environ['KAGGLE_API_TOKEN'] = 'your_token_here'  # Replace with your token
+```
+
+### Issue: Dataset download fails completely
+
+**Solution**:
+If both Kaggle and direct download fail, manually download and upload to Drive:
+
+1. Download SwiftKey from [Kaggle](https://www.kaggle.com/datasets/therohk/tweets-blogs-news-swiftkey-dataset-4million)
+2. Upload to Google Drive: `/Phu's Data development/data/english/`
+3. Re-run notebook - it will detect existing data
 
 ---
 
