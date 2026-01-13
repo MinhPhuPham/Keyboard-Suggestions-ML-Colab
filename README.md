@@ -36,7 +36,7 @@ KeyboardSuggestionsML/
 ### 1. Clone Repository
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/KeyboardSuggestionsML.git
+git clone https://github.com/MinhPhuPham/Keyboard-Suggestions-ML-Colab.git
 cd KeyboardSuggestionsML
 ```
 
@@ -65,7 +65,7 @@ jupyter notebook notebooks/train_english.ipynb
 **Option B: Google Colab Training (recommended)**
 
 1. Go to [Google Colab](https://colab.research.google.com)
-2. Open notebook from GitHub: `YOUR_USERNAME/KeyboardSuggestionsML`
+2. Open notebook from GitHub: `MinhPhuPham/Keyboard-Suggestions-ML-Colab`
 3. Select `notebooks/train_english.ipynb` or `notebooks/train_japanese.ipynb`
 4. Change runtime to GPU
 5. Run all cells
@@ -171,4 +171,4 @@ See the [Troubleshooting section](docs/COLAB_WORKFLOW_GUIDE.md#troubleshooting) 
 
 ---
 
-**Note**: Replace `YOUR_USERNAME` with your actual GitHub username throughout the project files.
+**Note**: Replace `MinhPhuPham` with your actual GitHub username throughout the project files.

@@ -65,20 +65,20 @@ This guide explains how to develop your keyboard suggestion ML models locally in
 If you already have the project locally:
 
 ```bash
-cd /Users/phupham/side-projects/KeyboardSuggestionsML
+cd /Users/phupham/side-projects/Keyboard-Suggestions-ML-Colab
 
 # Initialize git if not already done
 git init
 
-# Add remote (replace YOUR_USERNAME with your GitHub username)
-git remote add origin https://github.com/YOUR_USERNAME/KeyboardSuggestionsML.git
+# Add remote (replace MinhPhuPham with your GitHub username)
+git remote add origin https://github.com/MinhPhuPham/Keyboard-Suggestions-ML-Colab.git
 ```
 
 ### Step 2: Configure Local Repository
 
 ```bash
 # Navigate to project directory
-cd /Users/phupham/side-projects/KeyboardSuggestionsML
+cd /Users/phupham/side-projects/Keyboard-Suggestions-ML-Colab
 
 # Check git status
 git status
@@ -96,7 +96,7 @@ git push -u origin main
 
 ### Step 3: Verify on GitHub
 
-1. Go to your repository URL: `https://github.com/YOUR_USERNAME/KeyboardSuggestionsML`
+1. Go to your repository URL: `https://github.com/MinhPhuPham/Keyboard-Suggestions-ML-Colab`
 2. Verify you see:
    - ✅ `docs/` directory with `PROJECT_PLAN.md` and `COLAB_WORKFLOW_GUIDE.md`
    - ✅ `notebooks/` directory with training notebooks
@@ -123,7 +123,7 @@ git push -u origin main
 
 ```bash
 # Open project in VS Code
-cd /Users/phupham/side-projects/KeyboardSuggestionsML
+cd /Users/phupham/side-projects/Keyboard-Suggestions-ML-Colab
 code .
 
 # Make changes to:
@@ -181,7 +181,7 @@ git push
 1. Go to [colab.research.google.com](https://colab.research.google.com)
 2. Click **"File" → "Open notebook"**
 3. Click **"GitHub"** tab
-4. Search for your repository: `YOUR_USERNAME/KeyboardSuggestionsML`
+4. Search for your repository: `MinhPhuPham/Keyboard-Suggestions-ML-Colab`
 5. Select the notebook: `notebooks/train_english.ipynb` or `notebooks/train_japanese.ipynb`
 6. Click to open
 
@@ -189,7 +189,7 @@ git push
 
 Use this URL pattern (replace placeholders):
 ```
-https://colab.research.google.com/github/YOUR_USERNAME/KeyboardSuggestionsML/blob/main/notebooks/train_english.ipynb
+https://colab.research.google.com/github/MinhPhuPham/Keyboard-Suggestions-ML-Colab/blob/main/notebooks/train_english.ipynb
 ```
 
 ### Running Training Notebooks
@@ -206,7 +206,7 @@ The first cells in each notebook will:
 
 ```python
 # 1. Clone your repository to Colab
-!git clone https://github.com/YOUR_USERNAME/KeyboardSuggestionsML.git
+!git clone https://github.com/MinhPhuPham/Keyboard-Suggestions-ML-Colab.git
 %cd KeyboardSuggestionsML
 
 # 2. Install dependencies
@@ -282,10 +282,10 @@ Then on your local machine:
 cd ~/Downloads
 
 # Move to project
-mv english_model.zip /Users/phupham/side-projects/KeyboardSuggestionsML/
+mv english_model.zip /Users/phupham/side-projects/Keyboard-Suggestions-ML-Colab/
 
 # Extract
-cd /Users/phupham/side-projects/KeyboardSuggestionsML
+cd /Users/phupham/side-projects/Keyboard-Suggestions-ML-Colab
 unzip english_model.zip
 ```
 
@@ -326,7 +326,7 @@ drive.mount('/content/drive')
 Then pull on local machine:
 
 ```bash
-cd /Users/phupham/side-projects/KeyboardSuggestionsML
+cd /Users/phupham/side-projects/Keyboard-Suggestions-ML-Colab
 git pull
 ```
 
@@ -401,7 +401,7 @@ git commit -m "Update training notebook"
 **Solution**:
 ```python
 # For private repositories, use personal access token
-!git clone https://YOUR_TOKEN@github.com/YOUR_USERNAME/KeyboardSuggestionsML.git
+!git clone https://YOUR_TOKEN@github.com/MinhPhuPham/Keyboard-Suggestions-ML-Colab.git
 
 # Generate token at: https://github.com/settings/tokens
 ```
@@ -412,7 +412,7 @@ git commit -m "Update training notebook"
 ```python
 # Add src to Python path in Colab
 import sys
-sys.path.append('/content/KeyboardSuggestionsML/src')
+sys.path.append('/content/Keyboard-Suggestions-ML-Colab/src')
 
 # Now imports work
 from data_prep import clean_english_text
@@ -544,4 +544,4 @@ uploaded = files.upload()
 3. **Iterate**: Make improvements based on results
 4. **Deploy**: Export models to iOS/Android apps
 
-For questions about the model architecture and training details, refer to [PROJECT_PLAN.md](file:///Users/phupham/side-projects/KeyboardSuggestionsML/docs/PROJECT_PLAN.md).
+For questions about the model architecture and training details, refer to [PROJECT_PLAN.md](file:///Users/phupham/side-projects/Keyboard-Suggestions-ML-Colab/docs/PROJECT_PLAN.md).
