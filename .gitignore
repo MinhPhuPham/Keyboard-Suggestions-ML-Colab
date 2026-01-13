@@ -1,0 +1,81 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual Environments
+venv/
+env/
+ENV/
+.venv
+
+# Jupyter Notebook
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# PyCharm
+.idea/
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Data directories (large datasets)
+data/*
+!data/.gitkeep
+datasets/
+*.csv
+*.txt
+*.json
+*.jsonl
+!requirements.txt
+!.env.example
+
+# Model files (large binary files)
+models/*
+!models/.gitkeep
+*.pt
+*.pth
+*.bin
+*.onnx
+*.mlmodel
+*.tflite
+*.h5
+checkpoints/
+
+# Compressed files
+*.zip
+*.tar.gz
+*.rar
+
+# Environment variables
+.env
+.env.local
+.env.prod
+
+# Logs
+logs/
+*.log
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Temporary files
+*.tmp
+*.bak
+*.swp
+*~
