@@ -144,7 +144,7 @@ def train_causal_lm(
         logging_steps=50,
         save_steps=save_steps,
         save_total_limit=2,
-        evaluation_strategy="steps" if val_dataset else "no",
+        eval_strategy="steps" if val_dataset else "no",
         eval_steps=save_steps if val_dataset else None,
         fp16=True,  # Mixed precision training
         gradient_accumulation_steps=1,
