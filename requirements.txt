@@ -38,3 +38,4 @@ python-dotenv>=1.0.0
 # - notebook (Colab uses <7.0)
 # These conflicts are safe to ignore in Colab.
 onnxruntime
+onnxscript
