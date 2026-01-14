@@ -203,7 +203,7 @@ def evaluate_perplexity(model, tokenizer, eval_dataset) -> float:
 
 def prune_model(model, amount: float = 0.3) -> torch.nn.Module:
     """
-    Apply L1 unstructured pruning to model.
+    Apply L1 unstructured pruning to model (memory-efficient version).
     
     Args:
         model: Model to prune
@@ -214,24 +214,30 @@ def prune_model(model, amount: float = 0.3) -> torch.nn.Module:
     """
     print(f"Pruning {amount*100}% of model weights...")
     
+    # Move model to CPU to save GPU memory during pruning
+    device = next(model.parameters()).device
+    model = model.cpu()
+    
     # Get all Linear layers
     parameters_to_prune = []
     for name, module in model.named_modules():
         if isinstance(module, torch.nn.Linear):
             parameters_to_prune.append((module, 'weight'))
     
-    # Apply global unstructured pruning
-    prune.global_unstructured(
-        parameters_to_prune,
-        pruning_method=prune.L1Unstructured,
-        amount=amount,
-    )
+    print(f"  Found {len(parameters_to_prune)} layers to prune")
     
-    # Make pruning permanent
-    for module, param_name in parameters_to_prune:
-        prune.remove(module, param_name)
+    # Apply pruning module by module (memory-efficient)
+    for i, (module, param_name) in enumerate(parameters_to_prune):
+        if i % 10 == 0:
+            print(f"  Pruning layer {i+1}/{len(parameters_to_prune)}...")
+        
+        prune.l1_unstructured(module, name=param_name, amount=amount)
+        prune.remove(module, param_name)  # Make permanent immediately
     
-    print("Pruning complete")
+    print("✓ Pruning complete")
+    
+    # Move back to original device
+    model = model.to(device)
     
     return model
 
