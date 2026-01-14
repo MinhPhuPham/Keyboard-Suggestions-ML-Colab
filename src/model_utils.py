@@ -66,6 +66,10 @@ def load_model_with_lora(
             # Phi-3 uses: qkv_proj or o_proj
             target_modules = ["qkv_proj", "o_proj"]
             print(f"Detected Phi-3 model, using modules: {target_modules}")
+        elif "gemma" in model_type or "gemma" in model_name.lower():
+            # Gemma-2 uses: q_proj, k_proj, v_proj, o_proj
+            target_modules = ["q_proj", "k_proj", "v_proj", "o_proj"]
+            print(f"Detected Gemma model, using modules: {target_modules}")
         elif "qwen" in model_type or "qwen" in model_name.lower():
             # Qwen uses: c_attn or attn.c_proj
             target_modules = ["c_attn", "c_proj"]
