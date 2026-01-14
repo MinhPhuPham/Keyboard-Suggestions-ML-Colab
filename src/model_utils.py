@@ -201,18 +201,25 @@ def evaluate_perplexity(model, tokenizer, eval_dataset) -> float:
     return perplexity
 
 
-def prune_model(model, amount: float = 0.3) -> torch.nn.Module:
+def prune_model(model, amount: float = 0.2, structured: bool = False) -> torch.nn.Module:
     """
-    Apply L1 unstructured pruning to model (memory-efficient version).
+    Apply pruning to model (memory-efficient version).
+    
+    Pruning Trade-offs:
+    - amount=0.1: ~0.5-1% accuracy loss, ~10% size reduction
+    - amount=0.2: ~1-3% accuracy loss, ~20% size reduction (recommended)
+    - amount=0.3: ~2-5% accuracy loss, ~30% size reduction
     
     Args:
         model: Model to prune
         amount: Proportion of weights to prune (0.0 to 1.0)
+        structured: If True, use structured pruning (better for inference speed)
         
     Returns:
         Pruned model
     """
     print(f"Pruning {amount*100}% of model weights...")
+    print(f"  Mode: {'Structured' if structured else 'Unstructured'}")
     
     # Move model to CPU to save GPU memory during pruning
     device = next(model.parameters()).device
@@ -231,8 +238,24 @@ def prune_model(model, amount: float = 0.3) -> torch.nn.Module:
         if i % 10 == 0:
             print(f"  Pruning layer {i+1}/{len(parameters_to_prune)}...")
         
-        prune.l1_unstructured(module, name=param_name, amount=amount)
-        prune.remove(module, param_name)  # Make permanent immediately
+        if structured:
+            # Structured pruning - removes entire neurons (better for inference)
+            # Only prune if layer is large enough
+            if module.weight.shape[0] > 64:  # At least 64 output features
+                n_to_prune = int(module.weight.shape[0] * amount)
+                if n_to_prune > 0:
+                    prune.ln_structured(
+                        module,
+                        name=param_name,
+                        amount=n_to_prune,
+                        n=2,
+                        dim=0
+                    )
+                    prune.remove(module, param_name)
+        else:
+            # Unstructured pruning - removes individual weights (better compression)
+            prune.l1_unstructured(module, name=param_name, amount=amount)
+            prune.remove(module, param_name)  # Make permanent immediately
     
     print("✓ Pruning complete")
     
