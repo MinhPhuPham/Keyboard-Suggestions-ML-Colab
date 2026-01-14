@@ -222,12 +222,20 @@ def prune_model(model, amount: float = 0.2, structured: bool = False) -> torch.n
     Returns:
         Pruned model
     """
+    import gc
+    
     print(f"Pruning {amount*100}% of model weights...")
     print(f"  Mode: {'Structured' if structured else 'Unstructured'}")
     
     # Move model to CPU to save GPU memory during pruning
     device = next(model.parameters()).device
+    print(f"  Moving model from {device} to CPU...")
     model = model.cpu()
+    
+    # Clear GPU memory
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    gc.collect()
     
     # Get all Linear layers
     parameters_to_prune = []
@@ -235,12 +243,16 @@ def prune_model(model, amount: float = 0.2, structured: bool = False) -> torch.n
         if isinstance(module, torch.nn.Linear):
             parameters_to_prune.append((module, 'weight'))
     
-    print(f"  Found {len(parameters_to_prune)} layers to prune")
+    total_layers = len(parameters_to_prune)
+    print(f"  Found {total_layers} layers to prune")
     
     # Apply pruning module by module (memory-efficient)
+    batch_size = 10  # Process in batches
     for i, (module, param_name) in enumerate(parameters_to_prune):
-        if i % 10 == 0:
-            print(f"  Pruning layer {i+1}/{len(parameters_to_prune)}...")
+        if i % batch_size == 0:
+            print(f"  Pruning layer {i+1}/{total_layers}...")
+            # Periodic memory cleanup
+            gc.collect()
         
         if structured:
             # Structured pruning - removes entire neurons (better for inference)
@@ -263,8 +275,24 @@ def prune_model(model, amount: float = 0.2, structured: bool = False) -> torch.n
     
     print("✓ Pruning complete")
     
-    # Move back to original device
-    model = model.to(device)
+    # Final cleanup before moving back
+    gc.collect()
+    
+    # Move back to original device carefully
+    print(f"  Moving model back to {device}...")
+    try:
+        model = model.to(device)
+        print("✓ Model moved back to device")
+    except RuntimeError as e:
+        print(f"⚠ Could not move back to {device}: {e}")
+        print("  Keeping model on CPU")
+        # If GPU OOM, keep on CPU
+        pass
+    
+    # Final memory cleanup
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    gc.collect()
     
     return model
 
