@@ -48,12 +48,13 @@ def load_model_with_lora(
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     
-    # Load model
+    # Load model with use_cache=False to avoid DynamicCache compatibility issues
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
         torch_dtype=torch.float16,
         device_map="auto",
-        trust_remote_code=True
+        trust_remote_code=True,
+        use_cache=False  # Disable KV cache to avoid compatibility issues
     )
     
     # Auto-detect target modules if not specified
