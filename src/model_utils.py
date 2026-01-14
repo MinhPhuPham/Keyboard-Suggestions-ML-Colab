@@ -150,6 +150,7 @@ def train_causal_lm(
         gradient_accumulation_steps=1,
         dataloader_num_workers=2,
         remove_unused_columns=False,
+        report_to="none",  # Disable W&B, tensorboard, etc.
     )
     
     # Create trainer
