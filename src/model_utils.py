@@ -70,8 +70,10 @@ def load_model_with_lora(
             # Gemma-2 uses: q_proj, k_proj, v_proj, o_proj
             target_modules = ["q_proj", "k_proj", "v_proj", "o_proj"]
             print(f"Detected Gemma model, using modules: {target_modules}")
-            elif 'distilgpt2' in model_name.lower() or 'gpt2' in model_name.lower():
-                target_modules = ['c_attn', 'c_proj']  # GPT-2 style attention
+        elif 'distilgpt2' in model_name.lower() or 'gpt2' in model_name.lower():
+            # GPT-2 style models use: c_attn, c_proj
+            target_modules = ['c_attn', 'c_proj']
+            print(f"Detected GPT-2 model, using modules: {target_modules}")
         elif "qwen" in model_type or "qwen" in model_name.lower():
             # Qwen uses: c_attn or attn.c_proj
             target_modules = ["c_attn", "c_proj"]
