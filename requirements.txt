@@ -37,3 +37,4 @@ python-dotenv>=1.0.0
 # - jupyter-client (Colab uses <8.0)
 # - notebook (Colab uses <7.0)
 # These conflicts are safe to ignore in Colab.
+onnxruntime
