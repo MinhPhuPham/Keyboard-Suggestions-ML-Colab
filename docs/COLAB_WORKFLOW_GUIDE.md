@@ -55,7 +55,7 @@ This guide explains how to develop your keyboard suggestion ML models locally in
 1. Go to [github.com](https://github.com) and sign in
 2. Click **"New repository"** (green button)
 3. Configure repository:
-   - **Name**: `KeyboardSuggestionsML` (or your preferred name)
+   - **Name**: `Keyboard-Suggestions-ML-Colab` (or your preferred name)
    - **Visibility**: Choose **Private** (recommended) or Public
    - **Initialize**: Do NOT add README, .gitignore, or license (we'll create these)
 4. Click **"Create repository"**
@@ -207,7 +207,7 @@ The first cells in each notebook will:
 ```python
 # 1. Clone your repository to Colab
 !git clone https://github.com/MinhPhuPham/Keyboard-Suggestions-ML-Colab.git
-%cd KeyboardSuggestionsML
+%cd Keyboard-Suggestions-ML-Colab
 
 # 2. Install dependencies
 !pip install -q -r requirements.txt

@@ -93,7 +93,7 @@ def export_to_coreml(
     )
     
     # Set metadata
-    model.author = "KeyboardSuggestionsML"
+    model.author = "Keyboard-Suggestions-ML-Colab"
     model.short_description = f"{model_name} for keyboard suggestions"
     model.version = "1.0"
     

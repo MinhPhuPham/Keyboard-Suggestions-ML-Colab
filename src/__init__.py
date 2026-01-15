@@ -1,5 +1,5 @@
 """
-KeyboardSuggestionsML - Helper Utilities
+Keyboard-Suggestions-ML-Colab - Helper Utilities
 
 This package contains reusable utilities for training keyboard suggestion models.
 """

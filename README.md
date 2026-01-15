@@ -1,4 +1,4 @@
-# KeyboardSuggestionsML
+# Keyboard-Suggestions-ML-Colab
 
 Machine learning models for keyboard next-word suggestions in English and Japanese.
 
@@ -13,7 +13,7 @@ Both models use LoRA fine-tuning, pruning, and quantization to achieve mobile-fr
 ## Project Structure
 
 ```
-KeyboardSuggestionsML/
+Keyboard-Suggestions-ML-Colab/
 ├── docs/
 │   ├── PROJECT_PLAN.md           # Detailed training plan
 │   └── COLAB_WORKFLOW_GUIDE.md   # GitHub + Colab workflow guide
@@ -37,7 +37,7 @@ KeyboardSuggestionsML/
 
 ```bash
 git clone https://github.com/MinhPhuPham/Keyboard-Suggestions-ML-Colab.git
-cd KeyboardSuggestionsML
+cd Keyboard-Suggestions-ML-Colab
 ```
 
 ### 2. Install Dependencies
