@@ -20,9 +20,9 @@ The plan is divided into two phases:
 | Metric | Target |
 |:-------|:-------|
 | **Latency** | 50-100ms per suggestion |
-| **Model Size** | <10MB total (static model + N-gram resources) |
-| **RAM Usage** | <50MB runtime on mid-range devices (e.g., iPhone 12 or Snapdragon 888 equivalents) |
-| **Accuracy** | 85-90% top-3 recall |
+| **Model Size** | <60MB total (static model + N-gram resources) |
+| **RAM Usage** | <10MB runtime on mid-range devices (e.g., iPhone 12 or Snapdragon 888 equivalents) |
+| **Accuracy** | 90-95% top-3 recall |
 | **Deployment** | iOS (CoreML in UIKeyboardExtension) and Android (TFLite in InputMethodService) |
 | **Timeline** | 4-6 weeks (assuming 1 developer with Colab access) |
 
@@ -42,10 +42,9 @@ The plan is divided into two phases:
 - Custom trie (Python for build, Swift/Kotlin for runtime)
 
 **Datasets:**
-- Single English words (completion)
-- WikiText-103 (next-word)
+- Single English words with frequency (completion)
+- Custom training corpus (next-word prediction)
 - CSV with actual vs. misspelled words (typo correction)
-- All via Hugging Face/Kaggle/GitHub
 
 **Testing:**
 - iOS Simulator
@@ -62,16 +61,14 @@ The plan is divided into two phases:
 |:-----|:--------|:-------|
 | `single_word_freq.csv` | Single words with frequency for completion and N-gram building | `word,count_frequency` |
 | `misspelled.csv` | Typo correction pairs | `number,correct_word,misspelled_words` |
+| `keyboard_training_data.txt` | Custom training corpus for next-word prediction and N-gram building | Plain text (sentences/phrases) |
 
 ### Cloud Storage (Google Drive: `/datasets`)
 
 Same structure as local storage for backup and collaboration:
 - `single_word_freq.csv`
 - `misspelled.csv`
-
-**Additional datasets** (to be downloaded during training):
-- **WikiText-103**: From Hugging Face (`wikitext`) for next-word prediction and N-gram building
-- **Google-10000-English**: From GitHub (optional, if `single_word_freq.csv` is insufficient)
+- `keyboard_training_data.txt`
 
 ---
 
@@ -91,7 +88,7 @@ Focus on building a lightweight, static TinyBERT model fine-tuned for the featur
 - **Output:** Top-k tokens (k=30), filtered to words
 
 **Initial N-gram Integration:**
-- Build a base 2-3 gram trie from WikiText corpus + `single_word_freq.csv` for prefix/bigram lookups
+- Build a base 2-3 gram trie from `keyboard_training_data.txt` + `single_word_freq.csv` for prefix/bigram lookups
 - Use it to rank/filter model outputs (e.g., model suggests candidates, N-gram scores them by frequency/probability)
 
 **Hybrid Flow Optimization:**
@@ -117,9 +114,9 @@ Suggestion Pipeline:
 | Feature | Dataset | Location | Size |
 |:--------|:--------|:---------|:-----|
 | Completion | Single English words | `/datasets/single_word_freq.csv` (local/drive) | ~10k-50k words |
-| Next-Word | WikiText-103 | Hugging Face: `wikitext` | ~100M words |
+| Next-Word | Custom training corpus | `/datasets/keyboard_training_data.txt` (local/drive) | Variable |
 | Typo Correction | Misspelled pairs | `/datasets/misspelled.csv` (local/drive) | ~20k-50k entries |
-| N-gram Build | WikiText + word frequency | WikiText corpus + `single_word_freq.csv` | - |
+| N-gram Build | Training corpus + word frequency | `keyboard_training_data.txt` + `single_word_freq.csv` | - |
 
 **Preparation Steps:**
 
@@ -129,8 +126,9 @@ Suggestion Pipeline:
    - Use frequency counts for weighted sampling
 
 2. **Next-Word:**
-   - Download WikiText-103 from Hugging Face
+   - Load `keyboard_training_data.txt`
    - Extract ~100k samples (split sentences into short contexts like "The quick [MASK]", label "brown")
+   - Tokenize and create context-completion pairs
 
 3. **Typo Correction:**
    - Load `misspelled.csv`
@@ -146,7 +144,7 @@ Suggestion Pipeline:
    - `max_len=16`
 
 6. **Build Base N-gram:**
-   - Use KenLM or custom Python trie from WikiText + `single_word_freq.csv`
+   - Use KenLM or custom Python trie from `keyboard_training_data.txt` + `single_word_freq.csv`
    - Export as serialized file
 
 **Size Optimization:**
@@ -227,7 +225,7 @@ Build on Phase 1 by making the N-gram component updatable on-device for personal
 - Bigram matrix for next-word
 
 **Components:**
-- **Base:** Static file from Phase 1 (built from WikiText + `single_word_freq.csv`)
+- **Base:** Static file from Phase 1 (built from `keyboard_training_data.txt` + `single_word_freq.csv`)
 - **Personal:** Small overlay file (~0.5-1MB, user-specific frequencies)
 
 **Update Mechanism:**
@@ -319,9 +317,7 @@ Build on Phase 1 by making the N-gram component updatable on-device for personal
 
 - **Training:** Google Colab (free T4 GPU)
 - **Datasets:** 
-  - Local/Drive: `/datasets/single_word_freq.csv`, `/datasets/misspelled.csv`
-  - Hugging Face: WikiText-103 (free)
-  - GitHub: Google-10000-English (optional, free)
+  - Local/Drive: `/datasets/single_word_freq.csv`, `/datasets/misspelled.csv`, `/datasets/keyboard_training_data.txt`
 - **Developer Tools:** Xcode (iOS), Android Studio (Android)
 
 ---
