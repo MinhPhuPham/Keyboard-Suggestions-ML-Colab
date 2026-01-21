@@ -77,7 +77,7 @@ class KeyboardTrainer:
         
         # AMP scaler
         if self.use_amp:
-            self.scaler = torch.cuda.amp.GradScaler()
+            self.scaler = torch.amp.GradScaler('cuda')
         
         # Metrics
         self.history = {
@@ -116,7 +116,7 @@ class KeyboardTrainer:
             
             # Forward pass with AMP
             if self.use_amp:
-                with torch.cuda.amp.autocast():
+                with torch.amp.autocast('cuda'):
                     logits = self.model(input_ids, attention_mask)
                     loss = F.cross_entropy(
                         logits.view(-1, self.model.vocab_size),

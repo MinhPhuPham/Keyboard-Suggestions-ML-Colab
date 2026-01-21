@@ -73,7 +73,8 @@ class KeyboardTransformer(nn.Module):
         self.transformer = nn.TransformerEncoder(
             encoder_layer,
             num_layers=num_layers,
-            norm=nn.LayerNorm(hidden_size)
+            norm=nn.LayerNorm(hidden_size),
+            enable_nested_tensor=False  # Explicitly disable to suppress warning
         )
         
         # Output projection
