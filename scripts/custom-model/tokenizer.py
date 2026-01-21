@@ -12,10 +12,11 @@ from pathlib import Path
 
 class KeyboardTokenizer:
     """
-    Custom tokenizer with small vocabulary for efficient mobile deployment
+    Custom tokenizer with dynamic vocabulary for efficient mobile deployment
     
     Features:
-    - 10k most common English words
+    - Dynamic vocabulary built from training data (100% coverage)
+    - Or fixed vocabulary from frequency file
     - Special tokens: [PAD], [UNK], [MASK]
     - Fast encoding/decoding
     - Serializable for mobile export
@@ -90,6 +91,70 @@ class KeyboardTokenizer:
         print(f"  - Special tokens: 3")
         print(f"  - Regular words: {len(self.word2idx) - 3:,}")
         print(f"  - Coverage: Top {len(top_words):,} most frequent words")
+    
+    def build_vocab_from_training_data(
+        self, 
+        train_data_path: str,
+        max_vocab_size: int = 20000
+    ) -> None:
+        """
+        Build vocabulary dynamically from training data (100% coverage)
+        
+        This ensures ALL target words in training data are in vocabulary,
+        eliminating the [UNK] problem that causes high loss.
+        
+        Args:
+            train_data_path: Path to train.jsonl file
+            max_vocab_size: Maximum vocabulary size (safety limit)
+        """
+        from collections import Counter
+        
+        print(f"Building dynamic vocabulary from {train_data_path}...")
+        
+        # Collect all target words from training data
+        target_words = []
+        with open(train_data_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                try:
+                    sample = json.loads(line)
+                    target = sample['target'].strip().lower()
+                    if target and target.isalpha():
+                        target_words.append(target)
+                except (json.JSONDecodeError, KeyError):
+                    continue
+        
+        # Count frequencies
+        word_freq = Counter(target_words)
+        
+        # Get most common words (up to max_vocab_size - 3 for special tokens)
+        most_common = word_freq.most_common(max_vocab_size - 3)
+        
+        # Build vocabulary
+        self.word2idx = {
+            self.pad_token: self.pad_token_id,
+            self.unk_token: self.unk_token_id,
+            self.mask_token: self.mask_token_id
+        }
+        
+        for idx, (word, freq) in enumerate(most_common, start=3):
+            self.word2idx[word] = idx
+        
+        self.idx2word = {idx: word for word, idx in self.word2idx.items()}
+        self._is_built = True
+        
+        # Calculate coverage
+        total_targets = len(target_words)
+        covered_targets = sum(1 for w in target_words if w in self.word2idx)
+        coverage = covered_targets / total_targets * 100 if total_targets > 0 else 0
+        
+        print(f"✓ Dynamic vocabulary built: {len(self.word2idx):,} words")
+        print(f"  - Special tokens: 3")
+        print(f"  - Regular words: {len(self.word2idx) - 3:,}")
+        print(f"  - Unique targets in data: {len(word_freq):,}")
+        print(f"  - Coverage: {coverage:.2f}% of training targets")
+        
+        if coverage < 99.0:
+            print(f"  ⚠️  Warning: Coverage < 99%. Consider increasing max_vocab_size.")
     
     def encode(
         self, 

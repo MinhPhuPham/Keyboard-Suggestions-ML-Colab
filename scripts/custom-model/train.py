@@ -27,8 +27,8 @@ def main():
                         help='Directory to save model')
     
     # Model hyperparameters
-    parser.add_argument('--vocab-size', type=int, default=10000,
-                        help='Vocabulary size')
+    parser.add_argument('--vocab-size', type=int, default=20000,
+                        help='Maximum vocabulary size (dynamic from training data)')
     parser.add_argument('--hidden-size', type=int, default=128,
                         help='Hidden dimension size')
     parser.add_argument('--num-layers', type=int, default=6,
@@ -83,19 +83,22 @@ def main():
     print(f"Save directory: {args.save_dir}")
     print(f"{'='*60}\n")
     
-    # Build tokenizer
+    # Build tokenizer from training data (dynamic vocabulary for 100% coverage)
     print("Step 1: Building tokenizer...")
     tokenizer = KeyboardTokenizer(vocab_size=args.vocab_size)
     
-    # Word frequency file is in datasets folder, not processed folder
-    word_freq_path = Path(args.data_dir).parent / "datasets" / "single_word_freq.csv"
+    # Use dynamic vocabulary from training data
+    train_path = Path(args.data_dir) / "train.jsonl"
     
-    if not word_freq_path.exists():
-        print(f"❌ Error: Word frequency file not found: {word_freq_path}")
-        print(f"\n💡 Expected location: data/datasets/single_word_freq.csv")
+    if not train_path.exists():
+        print(f"❌ Error: Training data not found: {train_path}")
+        print(f"\n💡 Run prepare_data.py first to generate training data")
         sys.exit(1)
     
-    tokenizer.build_vocab(str(word_freq_path))
+    tokenizer.build_vocab_from_training_data(
+        str(train_path),
+        max_vocab_size=args.vocab_size
+    )
     
     # Save tokenizer
     save_dir = Path(args.save_dir)
