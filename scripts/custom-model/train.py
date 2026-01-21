@@ -29,13 +29,13 @@ def main():
     # Model hyperparameters
     parser.add_argument('--vocab-size', type=int, default=20000,
                         help='Maximum vocabulary size (dynamic from training data)')
-    parser.add_argument('--hidden-size', type=int, default=128,
-                        help='Hidden dimension size')
-    parser.add_argument('--num-layers', type=int, default=6,
+    parser.add_argument('--hidden-size', type=int, default=256,
+                        help='Hidden dimension size (256 for 14k vocab)')
+    parser.add_argument('--num-layers', type=int, default=8,
                         help='Number of transformer layers')
-    parser.add_argument('--num-heads', type=int, default=4,
-                        help='Number of attention heads')
-    parser.add_argument('--ff-dim', type=int, default=512,
+    parser.add_argument('--num-heads', type=int, default=8,
+                        help='Number of attention heads (must divide hidden-size)')
+    parser.add_argument('--ff-dim', type=int, default=1024,
                         help='Feed-forward dimension')
     parser.add_argument('--max-length', type=int, default=16,
                         help='Maximum sequence length')
@@ -47,8 +47,8 @@ def main():
                         help='Number of training epochs')
     parser.add_argument('--batch-size', type=int, default=32,
                         help='Batch size')
-    parser.add_argument('--learning-rate', type=float, default=1e-4,
-                        help='Learning rate (default: 1e-4, safer than 3e-4)')
+    parser.add_argument('--learning-rate', type=float, default=3e-4,
+                        help='Learning rate (3e-4 is optimal for transformers)')
     parser.add_argument('--weight-decay', type=float, default=0.01,
                         help='Weight decay')
     parser.add_argument('--max-grad-norm', type=float, default=1.0,
