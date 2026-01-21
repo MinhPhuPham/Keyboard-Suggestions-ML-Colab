@@ -40,6 +40,7 @@ datasets/
 
 # Model files (large binary files)
 models/*
+!models/custom_keyboard
 !models/.gitkeep
 *.pt
 *.pth
