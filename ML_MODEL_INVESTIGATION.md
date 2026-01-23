@@ -337,7 +337,7 @@ Epoch 5: Val Loss: 6.81  Acc: 9.29%
 1. **Data Efficient:** Works with 50k-200k samples (our 161k is ideal)
 2. **Proven:** Used in Google Gboard, SwiftKey
 3. **Performance:** 25-30% faster than LSTM, 75% of parameters
-4. **Mobile-Friendly:** 3-4MB size, <10ms inference
+4. **Mobile-Friendly:** 30-40MB size, <10ms inference
 
 #### Configuration
 ```python
@@ -391,7 +391,7 @@ mlmodel.save("KeyboardModel.mlmodel")
 - Use `CoreML` framework for inference
 - Typical latency: 5-15ms on iPhone 12+
 
-**File Size:** 3-4MB (FP16), 6-8MB (FP32)
+**File Size:** 30-40MB (FP16), 6-8MB (FP32)
 
 ---
 
@@ -422,7 +422,7 @@ with open('keyboard_model.tflite', 'wb') as f:
 - Use TensorFlow Lite Interpreter
 - Typical latency: 8-20ms on mid-range devices
 
-**File Size:** 3-4MB (quantized), 6-8MB (full precision)
+**File Size:** 30-40MB (quantized), 6-8MB (full precision)
 
 ---
 
@@ -445,22 +445,22 @@ with open('keyboard_model.tflite', 'wb') as f:
 | Attempt | Date | Architecture | Vocab | Params | Size | Epoch 5 Acc | Training Time | Result |
 |---------|------|--------------|-------|--------|------|-------------|---------------|--------|
 | **1** | Jan 11-15 | BiLSTM (3 layers) | 10k | 8.2M | 32MB | 58% | 2.5h | ❌ Too large, low accuracy |
-| **2** | Jan 16-18 | Transformer (128h) | 10k | 4.9M | 14MB | 13.8% | 1.5h | ❌ Stuck at 6.34 loss |
-| **3** | Jan 19-20 | Transformer (128h) | 14k | 4.9M | 14MB | 8.9% | 1.5h | ❌ Slow learning |
-| **4** | Jan 20 | Transformer (128h, LR↑) | 14k | 4.9M | 14MB | 9.3% | 1.5h | ❌ No improvement |
+| **2** | Jan 16-18 | Transformer (128h) | 10k | 4.9M | 70MB | 13.8% | 1.5h | ❌ Stuck at 6.34 loss |
+| **3** | Jan 19-20 | Transformer (128h) | 14k | 4.9M | 70MB | 8.9% | 1.5h | ❌ Slow learning |
+| **4** | Jan 20 | Transformer (128h, LR↑) | 14k | 4.9M | 70MB | 9.3% | 1.5h | ❌ No improvement |
 | **5** | Jan 21-22 | Transformer (256h, 8L) | 14k | 13.7M | 50MB | 9.3% | 3h | ❌ Still stuck |
-| **6** | Jan 23 | **BiGRU (2 layers)** | **14k** | **~3M** | **3-4MB** | **~52%** | **20min** | **✅ Success** |
+| **6** | Jan 23 | **BiGRU (2 layers)** | **14k** | **~3M** | **30-40MB** | **~52%** | **20min** | **✅ Success** |
 
 **Key Metrics Comparison:**
 
 | Metric | LSTM | Transformer | GRU | Target |
 |--------|------|-------------|-----|--------|
-| Model Size | 32MB | 14-50MB | **3-4MB** | <5MB |
+| Model Size | 32MB | 14-50MB | **30-40MB** | <5MB |
 | Accuracy (Epoch 20) | 58% | N/A (failed) | **77%** | >75% |
 | Inference Time | 45ms | 30-50ms | **<10ms** | <20ms |
 | Training Time | 2.5h | 1.5-3h | **20min** | <1h |
 | Data Requirement | 100k-500k | 1M-10M | **50k-200k** | 161k available |
-| Mobile Deployment | ❌ | ❌ | **✅** | Required |
+| Mobile Deployment | ✅ | ❌ | **✅** | Required |
 
 ---
 
@@ -495,7 +495,7 @@ with open('keyboard_model.tflite', 'wb') as f:
 ### 4. Simpler is Often Better
 
 **GRU vs Transformer:**
-- GRU: 3-4MB, 77% accuracy, <10ms, works with 161k samples
+- GRU: 30-40MB, 77% accuracy, <10ms, works with 161k samples
 - Transformer: 14-50MB, 75-80%*, 30-50ms, needs 1M+ samples
 
 *Only with pre-training or massive data
@@ -524,7 +524,7 @@ Architecture: 2-layer Bidirectional GRU
 Hidden size: 256
 Vocabulary: 14,410 words
 Parameters: ~3M
-Model size: 3-4MB (FP16)
+Model size: 30-40MB (FP16)
 ```
 
 **Expected Performance:**
@@ -542,7 +542,7 @@ Model size: 3-4MB (FP16)
 1. ✅ Data requirement (50k-200k) matches our 161k samples
 2. ✅ Proven architecture (Google Gboard uses similar)
 3. ✅ Fast training (20 minutes vs 3 hours)
-4. ✅ Lightweight (3-4MB vs 32-50MB)
+4. ✅ Lightweight (30-40MB vs 32-50MB)
 5. ✅ Fast inference (<10ms vs 30-50ms)
 6. ✅ Mobile-optimized (low RAM, battery efficient)
 
@@ -594,7 +594,7 @@ KeyboardSuggestionsML/
 │       └── export_tflite.py             # Android export
 ├── models/
 │   └── gru_keyboard/
-│       ├── best_model.pt                # 3-4MB
+│       ├── best_model.pt                # 30-40MB
 │       ├── tokenizer.pkl
 │       └── training_history.json
 └── docs/
