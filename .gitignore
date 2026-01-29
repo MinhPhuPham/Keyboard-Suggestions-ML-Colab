@@ -80,3 +80,6 @@ dist/
 *.bak
 *.swp
 *~
+
+coreml_env/
+venv-*
