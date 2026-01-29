@@ -83,3 +83,4 @@ dist/
 
 coreml_env/
 venv-*
+.build/

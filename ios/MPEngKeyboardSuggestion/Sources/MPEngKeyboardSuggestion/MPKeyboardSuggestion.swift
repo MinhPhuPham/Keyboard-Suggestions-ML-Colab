@@ -81,15 +81,24 @@ public final class MPKeyboardSuggestion {
     
     /// Initialize keyboard suggestion engine
     /// - Parameters:
-    ///   - bundle: Bundle containing resource files (default: .main)
+    ///   - bundle: Bundle containing resource files. Default uses package's Bundle.module.
+    ///             Pass Bundle.main if resources are in your app bundle.
     ///   - storageDirectory: Directory for persisted data (default: Documents)
-    public init(bundle: Bundle = .main, storageDirectory: URL? = nil) {
-        resourceLoader = MPResourceLoader(bundle: bundle)
-        modelInference = MPModelInference(resourceLoader: resourceLoader, bundle: bundle)
+    public init(bundle: Bundle? = nil, storageDirectory: URL? = nil) {
+        // Use Bundle.module for Swift Package resources, or provided bundle
+        let resourceBundle = bundle ?? Bundle.module
+        
+        MPLog.debug("[MPKeyboardSuggestion] init - Starting with bundle: \(resourceBundle.bundlePath)")
+        
+        resourceLoader = MPResourceLoader(bundle: resourceBundle)
+        modelInference = MPModelInference(resourceLoader: resourceLoader, bundle: resourceBundle)
         trieHelper = MPTrieHelper(resourceLoader: resourceLoader)
         learningManager = MPLearningManager(storageDirectory: storageDirectory)
         typoCorrector = MPTypoCorrector(resourceLoader: resourceLoader)
         shortcutManager = MPShortcutManager(storageDirectory: storageDirectory)
+        
+        MPLog.debug("[MPKeyboardSuggestion] init - Components initialized")
+        MPLog.debug("[MPKeyboardSuggestion] init - vocabSize=\(resourceLoader.vocabSize), gruReady=\(modelInference.isReady)")
     }
     
     // MARK: - Main API

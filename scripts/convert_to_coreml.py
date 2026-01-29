@@ -30,10 +30,10 @@ def build_model():
     # Input: Sequence of 10 integers
     inputs = layers.Input(shape=(10,), dtype='float32', name='input_layer')
     
-    x = layers.Embedding(input_dim=25000, output_dim=128)(inputs)
+    x = layers.Embedding(input_dim=25001, output_dim=128)(inputs)
     x = layers.GRU(256, return_sequences=False)(x)
     x = layers.Dropout(0.3)(x)
-    outputs = layers.Dense(25000, activation='softmax')(x)
+    outputs = layers.Dense(25001, activation='softmax')(x)
     
     return models.Model(inputs=inputs, outputs=outputs)
 

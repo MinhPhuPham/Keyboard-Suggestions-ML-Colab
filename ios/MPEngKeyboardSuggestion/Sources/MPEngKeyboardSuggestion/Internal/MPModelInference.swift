@@ -19,6 +19,7 @@ final class MPModelInference {
     
     init(resourceLoader: MPResourceLoader, bundle: Bundle = .main) {
         self.resourceLoader = resourceLoader
+        MPLog.debug("[MPModelInference] init - Starting model load from bundle: \(bundle.bundlePath)")
         loadModel(from: bundle)
     }
     
@@ -26,26 +27,55 @@ final class MPModelInference {
     
     private func loadModel(from bundle: Bundle) {
         loadQueue.async { [weak self] in
-            guard let self = self else { return }
+            guard let self = self else {
+                MPLog.error("[MPModelInference] loadModel - self is nil")
+                return
+            }
+            
+            MPLog.debug("[MPModelInference] loadModel - Searching for model files...")
+            
+            // List all resources in bundle for debugging
+            if let resourcePath = bundle.resourcePath {
+                let files = (try? FileManager.default.contentsOfDirectory(atPath: resourcePath)) ?? []
+                let modelFiles = files.filter { $0.contains("gru") || $0.contains(".mlmodel") || $0.contains(".mlpackage") }
+                MPLog.debug("[MPModelInference] loadModel - Found model-related files: \(modelFiles)")
+            }
             
             // Try compiled model first
             if let compiledURL = bundle.url(forResource: "gru_keyboard_ios", withExtension: "mlmodelc") {
+                MPLog.debug("[MPModelInference] loadModel - Found .mlmodelc at: \(compiledURL.path)")
                 do {
                     let config = MLModelConfiguration()
                     config.computeUnits = .cpuAndNeuralEngine
                     self.model = try MLModel(contentsOf: compiledURL, configuration: config)
+                    MPLog.debug("[MPModelInference] loadModel - ✅ Successfully loaded .mlmodelc")
                     return
-                } catch { }
+                } catch {
+                    MPLog.error("[MPModelInference] loadModel - ❌ Failed to load .mlmodelc: \(error)")
+                }
+            } else {
+                MPLog.debug("[MPModelInference] loadModel - No .mlmodelc found")
             }
             
             // Try mlpackage
             if let packageURL = bundle.url(forResource: "gru_keyboard_ios", withExtension: "mlpackage") {
+                MPLog.debug("[MPModelInference] loadModel - Found .mlpackage at: \(packageURL.path)")
                 do {
                     let compiledURL = try MLModel.compileModel(at: packageURL)
+                    MPLog.debug("[MPModelInference] loadModel - Compiled to: \(compiledURL.path)")
                     let config = MLModelConfiguration()
                     config.computeUnits = .cpuAndNeuralEngine
                     self.model = try MLModel(contentsOf: compiledURL, configuration: config)
-                } catch { }
+                    MPLog.debug("[MPModelInference] loadModel - ✅ Successfully loaded .mlpackage")
+                } catch {
+                    MPLog.error("[MPModelInference] loadModel - ❌ Failed to load .mlpackage: \(error)")
+                }
+            } else {
+                MPLog.debug("[MPModelInference] loadModel - No .mlpackage found")
+            }
+            
+            if self.model == nil {
+                MPLog.error("[MPModelInference] loadModel - ❌ NO MODEL LOADED! Model files not found in bundle.")
             }
         }
     }

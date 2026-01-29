@@ -22,7 +22,16 @@ let package = Package(
             dependencies: [],
             path: "Sources/MPEngKeyboardSuggestion",
             resources: [
-                .copy("Resources")
+                // Models - CoreML
+                .process("Resources/gru_keyboard_ios.mlpackage"),
+                // JSON Resources
+                .process("Resources/word_to_index.json"),
+                .process("Resources/vocab_high.json"),
+                .process("Resources/vocab_medium.json"),
+                .process("Resources/vocab_low.json"),
+                .process("Resources/compact_trie.json"),
+                .process("Resources/symspell_index.json"),
+                .process("Resources/keyboard_adjacent.json"),
             ]
         ),
         .testTarget(
