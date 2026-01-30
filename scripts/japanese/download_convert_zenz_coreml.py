@@ -8,7 +8,7 @@ and converts it to CoreML format for iOS deployment.
 Usage:
     python download_convert_zenz_coreml.py [--force-download] [--hf-token TOKEN]
 
-Model: https://huggingface.co/Miwa-Keita/zenz-v2.5-small
+Model: https://huggingface.co/Miwa-Keita/zenz-v3.1-xsmall
 
 Compatible versions:
 - Python: 3.10 or 3.11
@@ -30,7 +30,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(SCRIPT_DIR))
 MODELS_DIR = os.path.join(PROJECT_ROOT, 'models', 'japanese')
 
 # Default model (can be overridden by --model-name)
-DEFAULT_MODEL_NAME = "Miwa-Keita/zenz-v2.5-small"
+DEFAULT_MODEL_NAME = "Miwa-Keita/zenz-v3.1-xsmall"
 
 # These will be set based on model name
 MODEL_NAME = None
@@ -41,7 +41,7 @@ def setup_paths(model_name: str):
     """Setup global paths based on model name."""
     global MODEL_NAME, LOCAL_MODEL_DIR, COREML_MODEL_PATH
     MODEL_NAME = model_name
-    # Extract short name from "Miwa-Keita/zenz-v2.5-small" -> "zenz-v2.5-small"
+    # Extract short name from "Miwa-Keita/zenz-v3.1-xsmall" -> "zenz-v3.1-xsmall"
     short_name = model_name.split('/')[-1]
     LOCAL_MODEL_DIR = os.path.join(MODELS_DIR, short_name)
     COREML_MODEL_PATH = os.path.join(MODELS_DIR, f'{short_name.replace(".", "_")}_coreml.mlpackage')
