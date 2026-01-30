@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
 """
-Interactive Japanese Model Testing Script (zenz-v2.5-small)
+Interactive Japanese Model Testing Script (zenz GPT-2)
 
 Usage:
     python test_japanese_prediction.py [--model-dir path/to/model]
 
 Features:
-- Character-by-character prediction (no word splitting for Japanese)
-- Next token prediction from context
-- Configurable top-k (3 or 30 suggestions)
+- Kana-to-Kanji conversion (かな漢字変換)
+- Uses correct zenz input format with special markers
+- Configurable top-k suggestions
 - Real-time timing information
 - Type ':q' to quit
 
 Model: GPT-2 based Japanese model for kana-kanji conversion
+Format: \uEE00<input_katakana>\uEE01<output></s>
 """
 
 import torch
@@ -21,11 +22,41 @@ import time
 import sys
 import os
 import argparse
+import unicodedata
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 
+# Zenz special markers
+ZENZ_START = '\uEE00'  # Start of input
+ZENZ_OUTPUT = '\uEE01'  # Start of output
+ZENZ_CONTEXT = '\uEE02'  # Context marker (optional)
+ZENZ_EOS = '</s>'  # End of sequence
+
+
+def hiragana_to_katakana(text: str) -> str:
+    """Convert hiragana to katakana (zenz expects katakana input)."""
+    result = []
+    for char in text:
+        code = ord(char)
+        # Hiragana range: \u3041-\u3096, Katakana range: \u30A1-\u30F6
+        if 0x3041 <= code <= 0x3096:
+            result.append(chr(code + 0x60))  # Convert hiragana to katakana
+        else:
+            result.append(char)
+    return ''.join(result)
+
+
+def is_hiragana_or_katakana(text: str) -> bool:
+    """Check if text contains mainly hiragana/katakana."""
+    kana_count = 0
+    for char in text:
+        if '\u3041' <= char <= '\u3096' or '\u30A1' <= char <= '\u30F6':
+            kana_count += 1
+    return kana_count > 0
+
+
 class JapaneseKeyboardTester:
-    """Interactive tester for Japanese GPT-2 keyboard prediction model."""
+    """Interactive tester for Japanese GPT-2 kana-kanji conversion model."""
     
     def __init__(self, model_dir: str = "./models/japanese/zenz-v2.5-small"):
         """
@@ -51,7 +82,7 @@ class JapaneseKeyboardTester:
         
         # Model info
         self.vocab_size = self.tokenizer.vocab_size
-        self.model_name = "zenz-v2.5-small"
+        self.model_name = os.path.basename(model_dir)
         
         load_time = (time.time() - start_time) * 1000
         
@@ -62,77 +93,157 @@ class JapaneseKeyboardTester:
         print("=" * 60)
         print()
     
-    def predict(self, input_text: str, top_k: int = 3) -> tuple:
+    def format_zenz_input(self, kana_input: str, context: str = "") -> str:
         """
-        Generate predictions for next token.
+        Format input for zenz model.
+        
+        zenz-v2 format: \uEE00<input_katakana>\uEE01<output>
+        zenz-v2 with context: \uEE00<input_katakana>\uEE02<context>\uEE01<output>
         
         Args:
-            input_text: The input Japanese text
-            top_k: Number of suggestions to return
+            kana_input: Hiragana or katakana input
+            context: Optional left context
+        """
+        # Convert hiragana to katakana (zenz expects katakana)
+        katakana_input = hiragana_to_katakana(kana_input)
+        
+        if context:
+            return f"{ZENZ_START}{katakana_input}{ZENZ_CONTEXT}{context}{ZENZ_OUTPUT}"
+        else:
+            return f"{ZENZ_START}{katakana_input}{ZENZ_OUTPUT}"
+    
+    def predict_conversion(self, kana_input: str, context: str = "", top_k: int = 5, max_tokens: int = 20) -> tuple:
+        """
+        Generate kana-to-kanji conversion predictions.
+        
+        Args:
+            kana_input: Hiragana or katakana input to convert
+            context: Optional left context for better conversion
+            top_k: Number of conversion candidates
+            max_tokens: Maximum tokens to generate per candidate
             
         Returns:
-            Tuple of (predictions_list, probabilities, inference_time_ms)
+            Tuple of (conversions_list, probabilities, inference_time_ms)
         """
         start_time = time.time()
         
-        # Tokenize input
-        inputs = self.tokenizer(input_text, return_tensors="pt")
+        # Format input for zenz
+        formatted_input = self.format_zenz_input(kana_input, context)
+        
+        # Tokenize
+        inputs = self.tokenizer(formatted_input, return_tensors="pt")
         input_ids = inputs["input_ids"]
         
-        # Run inference
+        conversions = []
+        probs_list = []
+        
+        # Generate multiple candidates using beam search-like approach
         with torch.no_grad():
+            # Get initial predictions after the output marker
             outputs = self.model(input_ids)
-            # Get logits for the last position
             logits = outputs.logits[0, -1, :]
-            
-            # Apply softmax to get probabilities
             probs = torch.softmax(logits, dim=-1)
+            top_probs, top_indices = torch.topk(probs, top_k * 2)
             
-            # Get top-k predictions
-            top_probs, top_indices = torch.topk(probs, top_k)
-        
-        # Decode tokens
-        predictions = []
-        probabilities = []
-        
-        for idx, prob in zip(top_indices.tolist(), top_probs.tolist()):
-            token = self.tokenizer.decode([idx])
-            predictions.append(token)
-            probabilities.append(prob * 100)  # Convert to percentage
+            for idx, prob in zip(top_indices.tolist(), top_probs.tolist()):
+                if len(conversions) >= top_k:
+                    break
+                    
+                # Start building conversion
+                token = self.tokenizer.decode([idx])
+                
+                # Skip invalid tokens
+                if not self.is_valid_token(token):
+                    continue
+                
+                # Skip if it's a special marker or EOS
+                if token in [ZENZ_START, ZENZ_OUTPUT, ZENZ_CONTEXT, ZENZ_EOS, '</s>', '<s>']:
+                    continue
+                
+                conversion = token
+                combined_prob = prob
+                current_ids = torch.cat([input_ids, torch.tensor([[idx]])], dim=1)
+                
+                # Continue generating until EOS or max tokens
+                for _ in range(max_tokens - 1):
+                    outputs = self.model(current_ids)
+                    next_logits = outputs.logits[0, -1, :]
+                    next_probs = torch.softmax(next_logits, dim=-1)
+                    next_idx = torch.argmax(next_probs).item()
+                    next_prob = next_probs[next_idx].item()
+                    
+                    next_token = self.tokenizer.decode([next_idx])
+                    
+                    # Stop at EOS
+                    if next_token in ['</s>', '<s>'] or ZENZ_EOS in next_token:
+                        break
+                    
+                    # Stop at special markers
+                    if next_token in [ZENZ_START, ZENZ_OUTPUT, ZENZ_CONTEXT]:
+                        break
+                    
+                    # Skip invalid tokens
+                    if not self.is_valid_token(next_token):
+                        break
+                    
+                    conversion += next_token
+                    combined_prob *= next_prob
+                    current_ids = torch.cat([current_ids, torch.tensor([[next_idx]])], dim=1)
+                
+                if conversion.strip():
+                    conversions.append(conversion)
+                    probs_list.append(combined_prob * 100)
         
         inference_time = (time.time() - start_time) * 1000
         
-        return predictions, probabilities, inference_time
+        return conversions, probs_list, inference_time
     
-    def format_predictions(self, predictions: list, probabilities: list, input_text: str) -> str:
+    def is_valid_token(self, token: str) -> bool:
+        """
+        Check if a token is valid and displayable.
+        Filters out broken byte-level BPE tokens that appear as ���
+        """
+        if not token or token.strip() == "":
+            return False
+        
+        # Check for replacement character (appears when bytes can't be decoded)
+        if '\ufffd' in token:  # Unicode replacement character
+            return False
+        
+        # Check for other common problematic patterns
+        try:
+            token.encode('utf-8').decode('utf-8')
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            return False
+        
+        return True
+    
+    def format_predictions(self, conversions: list, probabilities: list, input_text: str) -> str:
         """Format predictions for display."""
-        if not predictions:
-            return "  No predictions generated"
+        if not conversions:
+            return "  No conversions generated"
         
         result = []
-        for i, (pred, prob) in enumerate(zip(predictions, probabilities), 1):
-            # Show what the full text would be with this prediction
-            full_text = f"{input_text}{pred}"
-            # Handle display of special characters
-            display_pred = repr(pred) if pred.strip() == "" else pred
-            result.append(f"  {i}. \"{full_text}\" [+{display_pred}] ({prob:.2f}%)")
+        for i, (conv, prob) in enumerate(zip(conversions, probabilities), 1):
+            result.append(f"  {i}. {conv} ({prob:.2f}%)")
         
         return "\n".join(result)
     
     def run_interactive(self):
         """Run the interactive testing loop."""
-        print("🇯🇵 Japanese Keyboard Prediction - Interactive Tester")
+        print("🇯🇵 Japanese Kana-Kanji Conversion - Interactive Tester")
         print("=" * 60)
         print("Instructions:")
-        print("  - Type Japanese text and press Enter to get predictions")
-        print("  - Each prediction shows the next character/token")
+        print("  - Type hiragana/katakana and press Enter to get conversions")
+        print("  - Example: 'ありがとう' → '有難う', '有り難う'")
         print("  - Type ':q' or 'quit' to exit")
-        print("  - Type ':k30' for 30 suggestions (default is 3)")
+        print("  - Type ':k10' for 10 suggestions (default is 5)")
+        print("  - Type ':ctx <text>' to set left context")
         print("  - Type ':clear' to clear context")
         print("=" * 60)
         print()
         
-        current_top_k = 3
+        current_top_k = 5
         context = ""
         
         while True:
@@ -141,7 +252,7 @@ class JapaneseKeyboardTester:
                 if context:
                     print(f"📝 Context: {context}")
                 
-                user_input = input("📝 Input: ")
+                user_input = input("📝 ひらがな入力: ")
                 
                 # Handle commands
                 if user_input.strip().lower() in [':q', 'quit', 'exit']:
@@ -153,34 +264,45 @@ class JapaneseKeyboardTester:
                     print("✓ Context cleared\n")
                     continue
                 
+                if user_input.strip().lower().startswith(':ctx '):
+                    context = user_input[5:].strip()
+                    print(f"✓ Context set to: {context}\n")
+                    continue
+                
                 if user_input.strip().lower() == ':help':
                     print("\nCommands:")
                     print("  :q, quit    - Quit")
                     print("  :help       - Show help")
                     print("  :stats      - Show model stats")
-                    print("  :k3         - 3 suggestions")
-                    print("  :k30        - 30 suggestions")
+                    print("  :k5         - 5 suggestions (default)")
+                    print("  :k10        - 10 suggestions")
+                    print("  :ctx <text> - Set left context")
                     print("  :clear      - Clear context")
+                    print("\nExamples:")
+                    print("  ありがとう → 有難う, 有り難う")
+                    print("  おはよう → お早う, おはよう")
+                    print("  にほんご → 日本語")
                     print()
                     continue
                 
                 if user_input.strip().lower() == ':stats':
                     print(f"\nModel Statistics:")
                     print(f"  Model: {self.model_name}")
+                    print(f"  Type: Kana-Kanji Conversion (zenz)")
                     print(f"  Architecture: GPT-2")
                     print(f"  Vocab size: {self.vocab_size:,}")
                     print(f"  Current top-k: {current_top_k}")
-                    print(f"  Current context: {len(context)} chars")
+                    print(f"  Current context: '{context}' ({len(context)} chars)")
                     print()
                     continue
                 
-                if user_input.strip().lower() == ':k3':
-                    current_top_k = 3
+                if user_input.strip().lower() == ':k5':
+                    current_top_k = 5
                     print(f"✓ Set to {current_top_k} suggestions\n")
                     continue
                 
-                if user_input.strip().lower() == ':k30':
-                    current_top_k = 30
+                if user_input.strip().lower() == ':k10':
+                    current_top_k = 10
                     print(f"✓ Set to {current_top_k} suggestions\n")
                     continue
                 
@@ -188,18 +310,21 @@ class JapaneseKeyboardTester:
                     print("⚠ Please enter some text\n")
                     continue
                 
-                # Add to context (Japanese: no space between characters)
-                context += user_input
+                # Check if input contains kana
+                if not is_hiragana_or_katakana(user_input):
+                    print("⚠ Please enter hiragana or katakana\n")
+                    continue
                 
-                # Generate predictions
-                predictions, probabilities, inference_time = self.predict(
-                    context, top_k=current_top_k
+                # Generate conversions
+                conversions, probabilities, inference_time = self.predict_conversion(
+                    user_input, context=context, top_k=current_top_k
                 )
                 
                 # Display results
+                katakana_input = hiragana_to_katakana(user_input)
                 print()
-                print(f"🔮 Next token predictions for: \"{context}\"")
-                print(self.format_predictions(predictions, probabilities, context))
+                print(f"🔮 Kanji conversions for: \"{user_input}\" (→ {katakana_input})")
+                print(self.format_predictions(conversions, probabilities, user_input))
                 print()
                 print(f"⏱️  Inference: {inference_time:.2f} ms")
                 print("=" * 60)
@@ -218,7 +343,7 @@ class JapaneseKeyboardTester:
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
-        description="Interactive testing for Japanese keyboard prediction model"
+        description="Interactive testing for Japanese kana-kanji conversion model"
     )
     parser.add_argument(
         "--model-dir",

@@ -28,9 +28,23 @@ import time
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(os.path.dirname(SCRIPT_DIR))
 MODELS_DIR = os.path.join(PROJECT_ROOT, 'models', 'japanese')
-MODEL_NAME = "Miwa-Keita/zenz-v2.5-small"
-LOCAL_MODEL_DIR = os.path.join(MODELS_DIR, 'zenz-v2.5-small')
-COREML_MODEL_PATH = os.path.join(MODELS_DIR, 'zenz_keyboard_ios.mlpackage')
+
+# Default model (can be overridden by --model-name)
+DEFAULT_MODEL_NAME = "Miwa-Keita/zenz-v2.5-small"
+
+# These will be set based on model name
+MODEL_NAME = None
+LOCAL_MODEL_DIR = None
+COREML_MODEL_PATH = None
+
+def setup_paths(model_name: str):
+    """Setup global paths based on model name."""
+    global MODEL_NAME, LOCAL_MODEL_DIR, COREML_MODEL_PATH
+    MODEL_NAME = model_name
+    # Extract short name from "Miwa-Keita/zenz-v2.5-small" -> "zenz-v2.5-small"
+    short_name = model_name.split('/')[-1]
+    LOCAL_MODEL_DIR = os.path.join(MODELS_DIR, short_name)
+    COREML_MODEL_PATH = os.path.join(MODELS_DIR, f'{short_name.replace(".", "_")}_coreml.mlpackage')
 
 
 def get_vocab_size_from_config() -> int:
@@ -178,7 +192,13 @@ def step_2_convert_to_coreml():
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Download zenz-v2.5-small and convert to CoreML"
+        description="Download Japanese GPT-2 model and convert to CoreML"
+    )
+    parser.add_argument(
+        "--model-name",
+        type=str,
+        default=DEFAULT_MODEL_NAME,
+        help=f"HuggingFace model name (default: {DEFAULT_MODEL_NAME})"
     )
     parser.add_argument(
         "--hf-token",
@@ -191,12 +211,25 @@ def main():
         action="store_true",
         help="Force re-download even if model exists"
     )
+    parser.add_argument(
+        "--skip-coreml",
+        action="store_true",
+        help="Skip CoreML conversion (download only)"
+    )
     
     args = parser.parse_args()
     
+    # Setup paths based on model name
+    setup_paths(args.model_name)
+    
+    short_name = args.model_name.split('/')[-1]
     print("\n" + "═" * 60)
-    print("🇯🇵 Japanese Keyboard Model Conversion")
-    print("   Model: zenz-v2.5-small (GPT-2, 91M params)")
+    print("🇯🇵 Japanese Keyboard Model")
+    print(f"   Model: {short_name} (GPT-2)")
+    if args.skip_coreml:
+        print("   Mode: Download only (skip CoreML)")
+    else:
+        print("   Mode: Download + CoreML conversion")
     print("═" * 60)
     
     # Smart download logic:
@@ -221,16 +254,23 @@ def main():
     if should_download:
         step_1_download_model(args.hf_token)
     
-    # Step 2: CoreML Conversion
-    step_2_convert_to_coreml()
+    # Step 2: CoreML Conversion (if not skipped)
+    if not args.skip_coreml:
+        step_2_convert_to_coreml()
     
     # Summary
     print("\n" + "═" * 60)
-    print("✅ CONVERSION COMPLETE!")
-    print("═" * 60)
-    print(f"📁 Model files: {LOCAL_MODEL_DIR}")
-    print(f"📁 CoreML:      {COREML_MODEL_PATH}")
-    print("\n👉 Open the .mlpackage in Xcode to verify the model")
+    if args.skip_coreml:
+        print("✅ DOWNLOAD COMPLETE!")
+        print("═" * 60)
+        print(f"📁 Model files: {LOCAL_MODEL_DIR}")
+        print("\n💡 To convert to CoreML, run without --skip-coreml")
+    else:
+        print("✅ CONVERSION COMPLETE!")
+        print("═" * 60)
+        print(f"📁 Model files: {LOCAL_MODEL_DIR}")
+        print(f"📁 CoreML:      {COREML_MODEL_PATH}")
+        print("\n👉 Open the .mlpackage in Xcode to verify the model")
     print("═" * 60)
 
 
