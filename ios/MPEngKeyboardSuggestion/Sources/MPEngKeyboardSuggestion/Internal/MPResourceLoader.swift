@@ -94,11 +94,15 @@ final class MPResourceLoader {
     }
     
     /// Search BK-Tree for words within edit distance
-    func searchBKTree(query: String, maxDistance: Int = 2) -> [(word: String, index: Int, distance: Int)] {
+    /// - Parameters:
+    ///   - query: The word to find corrections for
+    ///   - maxDistance: Maximum edit distance (default 2)
+    ///   - limit: Maximum results to return (default 20)
+    func searchBKTree(query: String, maxDistance: Int = 2, limit: Int = 20) -> [(word: String, index: Int, distance: Int)] {
         guard let root = bkTreeRoot else { return [] }
         
         var results: [(word: String, index: Int, distance: Int)] = []
-        searchBKTreeNode(node: root, query: query.lowercased(), maxDistance: maxDistance, results: &results)
+        searchBKTreeNode(node: root, query: query.lowercased(), maxDistance: maxDistance, limit: limit, results: &results)
         
         return results.sorted { $0.distance < $1.distance }
     }
@@ -177,7 +181,10 @@ final class MPResourceLoader {
         return node
     }
     
-    private func searchBKTreeNode(node: BKTreeNode, query: String, maxDistance: Int, results: inout [(word: String, index: Int, distance: Int)]) {
+    private func searchBKTreeNode(node: BKTreeNode, query: String, maxDistance: Int, limit: Int, results: inout [(word: String, index: Int, distance: Int)]) {
+        // Early termination if we have enough results
+        if results.count >= limit { return }
+        
         guard let nodeWord = indexToWord[node.wordIndex] else { return }
         
         let dist = levenshteinDistance(query, nodeWord.lowercased())
@@ -186,13 +193,15 @@ final class MPResourceLoader {
             results.append((nodeWord, node.wordIndex, dist))
         }
         
-        // Prune: only check children with distances in range [dist - maxDistance, dist + maxDistance]
-        let minDist = max(1, dist - maxDistance)
-        let maxDist = dist + maxDistance
+        // BK-Tree pruning: only check children with distances in range [dist - maxDistance, dist + maxDistance]
+        // This is the triangle inequality optimization
+        let minChildDist = max(0, dist - maxDistance)  // Fixed: was max(1, ...) which missed distance 0
+        let maxChildDist = dist + maxDistance
         
-        for childDist in minDist...maxDist {
+        for childDist in minChildDist...maxChildDist {
+            if results.count >= limit { return }
             if let child = node.children[childDist] {
-                searchBKTreeNode(node: child, query: query, maxDistance: maxDistance, results: &results)
+                searchBKTreeNode(node: child, query: query, maxDistance: maxDistance, limit: limit, results: &results)
             }
         }
     }

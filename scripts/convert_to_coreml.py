@@ -28,7 +28,7 @@ print("[1/3] Rebuilding Model Architecture...")
 
 def build_model():
     # Input: Sequence of 10 integers
-    inputs = layers.Input(shape=(10,), dtype='float32', name='input_layer')
+    inputs = layers.Input(shape=(10,), dtype='float32', name='input')
     
     x = layers.Embedding(input_dim=25001, output_dim=128)(inputs)
     x = layers.GRU(256, return_sequences=False)(x)
@@ -62,7 +62,7 @@ try:
         minimum_deployment_target=ct.target.iOS15,
         inputs=[
             ct.TensorType(
-                name="input_layer", 
+                name="input", 
                 shape=(1, 10),      
                 dtype=np.int32      # iOS Input is Integers
             )

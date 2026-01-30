@@ -211,24 +211,45 @@ public final class MPKeyboardSuggestion {
     
     private func getCompletionSuggestions(prefix: String, context: String, limit: Int) -> [MPSuggestion] {
         var candidates: [(word: String, score: Double, source: MPSuggestionSource)] = []
+        let lowerPrefix = prefix.lowercased()
         
+        // STRATEGY: Get GRU next-word predictions filtered by user's prefix
+        // Example: "How d" -> GRU predicts "do, did, don't" from context "How", filtered by "d"
+        // GRU predictions are CONTEXT-AWARE and should be prioritized!
         if useGRU && modelInference.isReady && !context.isEmpty {
-            let gruFiltered = modelInference.predictWithPrefix(context: context, prefix: prefix, topK: limit * 2)
+            // Get predictions from cache or model, filtered by prefix
+            let gruFiltered = modelInference.predictWithPrefix(context: context, prefix: lowerPrefix, topK: limit * 3)
             for (word, prob) in gruFiltered {
-                candidates.append((word, Double(prob) * 100, .gru))
+                // GRU + prefix match = HIGHEST priority
+                // Add 200 point CONTEXT BONUS + multiplied probability
+                // This ensures GRU beats trie (max ~120) when context matches
+                let contextBonus: Double = 200.0
+                let probScore = Double(prob) * 500
+                candidates.append((word, contextBonus + probScore, .gru))
             }
+            MPLog.debug("[getCompletionSuggestions] GRU candidates: \(candidates.map { ($0.word, $0.score) })")
         }
         
-        let trieResults = trieHelper.searchPrefix(prefix, limit: limit * 2)
+        // Trie completions as backup (already filtered during export - no nonsense words)
+        let trieResults = trieHelper.searchPrefix(lowerPrefix, limit: limit * 2)
         for (word, score) in trieResults {
+            // Skip single letters (except "a" and "i") - they should come from GRU context
+            if word.count == 1 && word.lowercased() != "a" && word.lowercased() != "i" {
+                continue
+            }
+            // If we have GRU candidates with same word, skip trie version
+            if candidates.contains(where: { $0.word.lowercased() == word.lowercased() }) {
+                continue
+            }
             candidates.append((word, score, .trie))
         }
         
+        // Learning-based suggestions with prefix filter
         if useLearning {
             let contextWord = context.split(separator: " ").last.map(String.init) ?? ""
             let bigramSuggestions = learningManager.getBigramSuggestions(for: contextWord, limit: 10)
             for (word, count) in bigramSuggestions {
-                if word.lowercased().hasPrefix(prefix.lowercased()) {
+                if word.lowercased().hasPrefix(lowerPrefix) {
                     candidates.append((word, Double(count) * 30, .learning))
                 }
             }

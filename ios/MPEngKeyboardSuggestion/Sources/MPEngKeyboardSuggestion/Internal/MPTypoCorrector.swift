@@ -40,7 +40,7 @@ final class MPTypoCorrector {
         }
         
         // Method 1: BK-Tree search (edit distance 1-2)
-        let bkResults = loader.searchBKTree(query: lowerTypo, maxDistance: 2)
+        let bkResults = loader.searchBKTree(query: lowerTypo, maxDistance: 2, limit: limit * 4)
         for (word, idx, dist) in bkResults {
             if !seen.contains(word.lowercased()) && dist > 0 {
                 let chunkBonus: Double = idx < 7000 ? 2.0 : 1.0
@@ -68,10 +68,28 @@ final class MPTypoCorrector {
     }
     
     /// Check if word is likely a typo
+    /// A word is a typo if:
+    /// 1. It's NOT in the vocabulary
+    /// 2. It's NOT a valid prefix (no words start with it)
+    /// 3. There ARE similar words in the vocabulary (via BK-Tree)
     func isLikelyTypo(_ word: String) -> Bool {
         guard let loader = resourceLoader else { return false }
-        if loader.getWordIndex(word.lowercased()) != nil { return false }
-        return !getCorrections(for: word, limit: 1).isEmpty
+        
+        let lowerWord = word.lowercased()
+        
+        // If word exists in vocabulary, it's not a typo
+        if loader.getWordIndex(lowerWord) != nil { return false }
+        
+        // If word is a valid prefix (there are words starting with it), it's NOT a typo
+        // This is critical: "phy" is a prefix for "physical", "physics", etc.
+        let prefixCompletions = loader.getTrieCompletions(for: lowerWord, limit: 3)
+        if !prefixCompletions.isEmpty {
+            return false  // Valid prefix, use completion instead
+        }
+        
+        // No prefix matches found, check if there are corrections via BK-Tree
+        let corrections = loader.searchBKTree(query: lowerWord, maxDistance: 2, limit: 1)
+        return !corrections.isEmpty
     }
     
     // MARK: - Private Methods
