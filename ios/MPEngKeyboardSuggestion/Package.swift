@@ -30,7 +30,7 @@ let package = Package(
                 .process("Resources/vocab_medium.json"),
                 .process("Resources/vocab_low.json"),
                 .process("Resources/compact_trie.json"),
-                .process("Resources/symspell_index.json"),
+                .process("Resources/bk_tree.json"),
                 .process("Resources/keyboard_adjacent.json"),
             ]
         ),

@@ -1,7 +1,7 @@
 // ============================================================
 // MPResourceLoader.swift
 // ============================================================
-// Handles loading vocabulary chunks, compact trie, and SymSpell index
+// Handles loading vocabulary chunks, compact trie, and BK-Tree
 // NO SINGLETON - initialize through MPKeyboardSuggestion
 // ============================================================
 
@@ -20,13 +20,23 @@ struct MPTrieResult {
     let chunk: MPVocabChunk
 }
 
+/// BK-Tree node for typo correction
+private class BKTreeNode {
+    let wordIndex: Int
+    var children: [Int: BKTreeNode] = [:]  // distance -> child
+    
+    init(wordIndex: Int) {
+        self.wordIndex = wordIndex
+    }
+}
+
 final class MPResourceLoader {
     
     // MARK: - Properties
     
     private var loadedChunks: [MPVocabChunk: [String]] = [:]
-    private var compactTrie: [String: Any]?  // Nested trie structure
-    private var symspellIndex: [String: [Int]]?  // Delete variants -> word indices
+    private var compactTrie: [String: Any]?
+    private var bkTreeRoot: BKTreeNode?
     private var keyboardAdjacent: [String: String] = [:]
     private var wordToIndex: [String: Int] = [:]
     private var indexToWord: [Int: String] = [:]
@@ -39,95 +49,74 @@ final class MPResourceLoader {
     
     init(bundle: Bundle = .main) {
         self.bundle = bundle
-        MPLog.debug("[MPResourceLoader] init - Loading resources from bundle: \(bundle.bundlePath)")
+        MPLog.debug("[MPResourceLoader] init - Loading resources")
         loadWordMappings()
         loadCompactTrie()
-        loadSymSpellIndex()
+        loadBKTree()
         loadKeyboardAdjacent()
         loadChunk(.high)
-        MPLog.debug("[MPResourceLoader] init - Finished. vocabSize=\(vocabSize), trieLoaded=\(compactTrie != nil), symspellLoaded=\(symspellIndex != nil)")
+        MPLog.debug("[MPResourceLoader] init - Done. vocab=\(vocabSize), trie=\(compactTrie != nil), bkTree=\(bkTreeRoot != nil)")
     }
     
     // MARK: - Public API
     
-    /// Get words from a specific chunk
     func getChunkWords(_ chunk: MPVocabChunk) -> [String]? {
-        if loadedChunks[chunk] == nil {
-            loadChunk(chunk)
-        }
+        if loadedChunks[chunk] == nil { loadChunk(chunk) }
         return loadedChunks[chunk]
     }
     
     /// Get completions using compact trie traversal
-    /// - Parameters:
-    ///   - prefix: The prefix to search for
-    ///   - limit: Maximum results to return
-    /// - Returns: Array of matching words with metadata
     func getTrieCompletions(for prefix: String, limit: Int = 50) -> [MPTrieResult] {
         let lowerPrefix = prefix.lowercased()
         
-        MPLog.debug("[MPResourceLoader] getTrieCompletions - prefix='\(lowerPrefix)', trieLoaded=\(compactTrie != nil)")
-        
         guard let trie = compactTrie else {
-            MPLog.debug("[MPResourceLoader] getTrieCompletions - No trie, falling back to linear search")
             return searchLoadedChunks(prefix: lowerPrefix, limit: limit)
         }
         
         // Traverse trie to find the node matching the prefix
         var node: [String: Any] = trie
         for char in lowerPrefix {
-            let charStr = String(char)
-            if let next = node[charStr] as? [String: Any] {
+            if let next = node[String(char)] as? [String: Any] {
                 node = next
             } else {
-                MPLog.debug("[MPResourceLoader] getTrieCompletions - Prefix '\(lowerPrefix)' not in trie, trying fallback")
-                // Try shorter prefixes as fallback
                 return getTrieCompletionsFallback(prefix: lowerPrefix, limit: limit)
             }
         }
         
-        // Collect all word indices from this node and descendants
+        // Collect word indices from this node
         var indices: [Int] = []
         collectIndicesFromNode(node, into: &indices, limit: limit)
         
-        // Convert indices to results
-        var results: [MPTrieResult] = []
-        for idx in indices {
-            if let word = indexToWord[idx] {
-                let chunk = getChunkForIndex(idx)
-                results.append(MPTrieResult(word: word, globalIndex: idx, chunk: chunk))
-                if results.count >= limit { break }
-            }
+        return indices.prefix(limit).compactMap { idx -> MPTrieResult? in
+            guard let word = indexToWord[idx] else { return nil }
+            return MPTrieResult(word: word, globalIndex: idx, chunk: getChunkForIndex(idx))
         }
+    }
+    
+    /// Search BK-Tree for words within edit distance
+    func searchBKTree(query: String, maxDistance: Int = 2) -> [(word: String, index: Int, distance: Int)] {
+        guard let root = bkTreeRoot else { return [] }
         
-        MPLog.debug("[MPResourceLoader] getTrieCompletions - Found \(results.count) results for '\(lowerPrefix)'")
-        return results
+        var results: [(word: String, index: Int, distance: Int)] = []
+        searchBKTreeNode(node: root, query: query.lowercased(), maxDistance: maxDistance, results: &results)
+        
+        return results.sorted { $0.distance < $1.distance }
     }
     
-    /// Get SymSpell matches for a term (exact or delete variant)
-    func getSymSpellMatches(for term: String) -> [Int]? {
-        return symspellIndex?[term.lowercased()]
-    }
-    
-    /// Get word index from word
     func getWordIndex(_ word: String) -> Int? {
         return wordToIndex[word.lowercased()]
     }
     
-    /// Get word from index
     func getWordByIndex(_ index: Int) -> String? {
         return indexToWord[index]
     }
     
-    /// Get adjacent keys for typo correction
     func getAdjacentKeys(for key: Character) -> String {
         return keyboardAdjacent[String(key).lowercased()] ?? ""
     }
     
-    /// Total vocabulary size
     var vocabSize: Int { wordToIndex.count }
     
-    /// Async chunk loading
     func loadChunkAsync(_ chunk: MPVocabChunk, completion: (() -> Void)? = nil) {
         if loadedChunks[chunk] != nil { completion?(); return }
         loadQueue.async { [weak self] in
@@ -136,7 +125,6 @@ final class MPResourceLoader {
         }
     }
     
-    /// Preload all chunks
     func preloadAllChunks(completion: (() -> Void)? = nil) {
         loadQueue.async { [weak self] in
             self?.loadChunk(.medium)
@@ -145,7 +133,6 @@ final class MPResourceLoader {
         }
     }
     
-    /// Release memory
     func releaseMemory(keepHigh: Bool = true) {
         if !keepHigh { loadedChunks.removeValue(forKey: .high) }
         loadedChunks.removeValue(forKey: .medium)
@@ -155,40 +142,85 @@ final class MPResourceLoader {
     // MARK: - Private Loading Methods
     
     private func loadCompactTrie() {
-        guard let url = bundle.url(forResource: "compact_trie", withExtension: "json") else {
-            MPLog.debug("[MPResourceLoader] loadCompactTrie - compact_trie.json not found, will use fallback")
-            return
-        }
-        guard let data = try? Data(contentsOf: url, options: .mappedIfSafe),
+        guard let url = bundle.url(forResource: "compact_trie", withExtension: "json"),
+              let data = try? Data(contentsOf: url, options: .mappedIfSafe),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            MPLog.error("[MPResourceLoader] loadCompactTrie - Failed to parse compact_trie.json")
             return
         }
-        
         compactTrie = json
-        MPLog.debug("[MPResourceLoader] loadCompactTrie - ✅ Loaded compact trie")
     }
     
-    private func loadSymSpellIndex() {
-        guard let url = bundle.url(forResource: "symspell_index", withExtension: "json") else {
-            MPLog.debug("[MPResourceLoader] loadSymSpellIndex - symspell_index.json not found, will use fallback")
+    private func loadBKTree() {
+        guard let url = bundle.url(forResource: "bk_tree", withExtension: "json"),
+              let data = try? Data(contentsOf: url, options: .mappedIfSafe),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [Any] else {
+            MPLog.debug("[MPResourceLoader] loadBKTree - bk_tree.json not found")
             return
         }
-        guard let data = try? Data(contentsOf: url, options: .mappedIfSafe),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: [Int]] else {
-            MPLog.error("[MPResourceLoader] loadSymSpellIndex - Failed to parse symspell_index.json")
-            return
+        bkTreeRoot = parseBKTreeNode(json)
+        MPLog.debug("[MPResourceLoader] loadBKTree - ✅ Loaded BK-Tree")
+    }
+    
+    private func parseBKTreeNode(_ json: [Any]) -> BKTreeNode? {
+        guard let wordIdx = json.first as? Int else { return nil }
+        
+        let node = BKTreeNode(wordIndex: wordIdx)
+        
+        if json.count > 1, let children = json[1] as? [String: [Any]] {
+            for (distStr, childJson) in children {
+                if let dist = Int(distStr), let child = parseBKTreeNode(childJson) {
+                    node.children[dist] = child
+                }
+            }
         }
         
-        symspellIndex = json
-        MPLog.debug("[MPResourceLoader] loadSymSpellIndex - ✅ Loaded \(json.count) symspell entries")
+        return node
+    }
+    
+    private func searchBKTreeNode(node: BKTreeNode, query: String, maxDistance: Int, results: inout [(word: String, index: Int, distance: Int)]) {
+        guard let nodeWord = indexToWord[node.wordIndex] else { return }
+        
+        let dist = levenshteinDistance(query, nodeWord.lowercased())
+        
+        if dist <= maxDistance {
+            results.append((nodeWord, node.wordIndex, dist))
+        }
+        
+        // Prune: only check children with distances in range [dist - maxDistance, dist + maxDistance]
+        let minDist = max(1, dist - maxDistance)
+        let maxDist = dist + maxDistance
+        
+        for childDist in minDist...maxDist {
+            if let child = node.children[childDist] {
+                searchBKTreeNode(node: child, query: query, maxDistance: maxDistance, results: &results)
+            }
+        }
+    }
+    
+    private func levenshteinDistance(_ s1: String, _ s2: String) -> Int {
+        let m = s1.count, n = s2.count
+        if m == 0 { return n }
+        if n == 0 { return m }
+        
+        let s1 = Array(s1), s2 = Array(s2)
+        var prev = Array(0...n)
+        var curr = [Int](repeating: 0, count: n + 1)
+        
+        for i in 1...m {
+            curr[0] = i
+            for j in 1...n {
+                let cost = s1[i-1] == s2[j-1] ? 0 : 1
+                curr[j] = min(prev[j] + 1, curr[j-1] + 1, prev[j-1] + cost)
+            }
+            swap(&prev, &curr)
+        }
+        return prev[n]
     }
     
     private func loadKeyboardAdjacent() {
         guard let url = bundle.url(forResource: "keyboard_adjacent", withExtension: "json"),
               let data = try? Data(contentsOf: url, options: .mappedIfSafe),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: String] else {
-            // Use default keyboard layout
             keyboardAdjacent = [
                 "q": "wa", "w": "qase", "e": "wsdr", "r": "edft", "t": "rfgy",
                 "y": "tghu", "u": "yhji", "i": "ujko", "o": "iklp", "p": "ol",
@@ -203,21 +235,13 @@ final class MPResourceLoader {
     }
     
     private func loadWordMappings() {
-        guard let url = bundle.url(forResource: "word_to_index", withExtension: "json") else {
-            MPLog.error("[MPResourceLoader] loadWordMappings - ❌ word_to_index.json not found")
-            return
-        }
-        guard let data = try? Data(contentsOf: url, options: .mappedIfSafe),
+        guard let url = bundle.url(forResource: "word_to_index", withExtension: "json"),
+              let data = try? Data(contentsOf: url, options: .mappedIfSafe),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Int] else {
-            MPLog.error("[MPResourceLoader] loadWordMappings - ❌ Failed to parse word_to_index.json")
             return
         }
-        
         wordToIndex = json
-        indexToWord = wordToIndex.reduce(into: [:]) { result, pair in
-            result[pair.value] = pair.key
-        }
-        MPLog.debug("[MPResourceLoader] loadWordMappings - ✅ Loaded \(wordToIndex.count) word mappings")
+        indexToWord = wordToIndex.reduce(into: [:]) { $0[$1.value] = $1.key }
     }
     
     private func loadChunk(_ chunk: MPVocabChunk) {
@@ -229,27 +253,21 @@ final class MPResourceLoader {
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let words = json["words"] as? [String] else {
             loadingChunks.remove(chunk)
-            MPLog.error("[MPResourceLoader] loadChunk - ❌ Failed to load \(chunk.rawValue).json")
             return
         }
         
         loadedChunks[chunk] = words
         loadingChunks.remove(chunk)
-        MPLog.debug("[MPResourceLoader] loadChunk - ✅ \(chunk.rawValue) (\(words.count) words)")
     }
     
-    // MARK: - Trie Helper Methods
+    // MARK: - Trie Helpers
     
-    /// Recursively collect word indices from trie node and descendants
     private func collectIndicesFromNode(_ node: [String: Any], into indices: inout [Int], limit: Int) {
-        // Get indices at this node (terminal words)
         if let terminalIndices = node["$"] as? [Int] {
             indices.append(contentsOf: terminalIndices)
         }
-        
         if indices.count >= limit { return }
         
-        // Traverse children (in alphabetical order for consistency)
         for (key, value) in node.sorted(by: { $0.key < $1.key }) {
             if key == "$" { continue }
             if let childNode = value as? [String: Any] {
@@ -259,56 +277,37 @@ final class MPResourceLoader {
         }
     }
     
-    /// Fallback: try shorter prefixes
     private func getTrieCompletionsFallback(prefix: String, limit: Int) -> [MPTrieResult] {
-        // Try progressively shorter prefixes
         for prefixLen in stride(from: prefix.count - 1, through: 1, by: -1) {
-            let shorterPrefix = String(prefix.prefix(prefixLen))
+            let shorter = String(prefix.prefix(prefixLen))
             if let trie = compactTrie {
                 var node: [String: Any] = trie
                 var found = true
-                
-                for char in shorterPrefix {
+                for char in shorter {
                     if let next = node[String(char)] as? [String: Any] {
                         node = next
-                    } else {
-                        found = false
-                        break
-                    }
+                    } else { found = false; break }
                 }
-                
                 if found {
                     var indices: [Int] = []
                     collectIndicesFromNode(node, into: &indices, limit: limit * 2)
-                    
-                    // Filter to only words that actually start with the original prefix
-                    var results: [MPTrieResult] = []
-                    for idx in indices {
-                        if let word = indexToWord[idx], word.lowercased().hasPrefix(prefix) {
-                            let chunk = getChunkForIndex(idx)
-                            results.append(MPTrieResult(word: word, globalIndex: idx, chunk: chunk))
-                            if results.count >= limit { break }
-                        }
+                    let results = indices.compactMap { idx -> MPTrieResult? in
+                        guard let word = indexToWord[idx], word.lowercased().hasPrefix(prefix) else { return nil }
+                        return MPTrieResult(word: word, globalIndex: idx, chunk: getChunkForIndex(idx))
                     }
-                    
-                    if !results.isEmpty { return results }
+                    if !results.isEmpty { return Array(results.prefix(limit)) }
                 }
             }
         }
-        
-        // Final fallback: linear search
         return searchLoadedChunks(prefix: prefix, limit: limit)
     }
     
-    /// Linear search through loaded chunks (fallback)
     private func searchLoadedChunks(prefix: String, limit: Int) -> [MPTrieResult] {
         var results: [MPTrieResult] = []
-        let lowerPrefix = prefix.lowercased()
-        
         for chunk in MPVocabChunk.allCases {
             guard let words = loadedChunks[chunk] else { continue }
             for (idx, word) in words.enumerated() {
-                if word.lowercased().hasPrefix(lowerPrefix) {
+                if word.lowercased().hasPrefix(prefix) {
                     let globalIdx = wordToIndex[word.lowercased()] ?? idx
                     results.append(MPTrieResult(word: word, globalIndex: globalIdx, chunk: chunk))
                     if results.count >= limit { return results }
@@ -318,9 +317,7 @@ final class MPResourceLoader {
         return results
     }
     
-    /// Determine chunk for a word index
     private func getChunkForIndex(_ index: Int) -> MPVocabChunk {
-        // Based on Zipf ordering: lower indices = high frequency
         if index < 7000 { return .high }
         if index < 17000 { return .medium }
         return .low
