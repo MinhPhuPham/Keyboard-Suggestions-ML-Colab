@@ -1,0 +1,16 @@
+# --- Core Dependencies ---
+# PIN NumPy to <2.0 to prevent binary incompatibility crashes
+numpy<2.0
+
+# --- PyTorch Stack ---
+# Torch 2.2.x is the most stable sweet spot for CoreMLTools 7.2/8.0
+torch==2.2.2
+torchvision==0.17.2
+
+# --- Hugging Face ---
+# 4.38.2 is known to trace GPT-2 correctly without "Strict" errors
+transformers==4.38.2
+
+# --- CoreML ---
+# Use 8.0+ for Python 3.11 support (7.2 is flaky on 3.11)
+coremltools==8.0b1

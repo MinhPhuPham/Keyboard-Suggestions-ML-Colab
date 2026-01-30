@@ -36,6 +36,7 @@ datasets/
 *.json
 *.jsonl
 !requirements.txt
+!requirements_japanese.txt
 !.env.example
 
 # Model files (large binary files)
