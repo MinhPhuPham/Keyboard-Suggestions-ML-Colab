@@ -168,59 +168,83 @@ class JapaneseKeyboardTester:
         return conversions, probs_list, inference_time
     
     # ========================================
-    # Mode 2: Next Character Prediction
+    # Mode 2: Next Phrase Prediction
     # ========================================
-    def predict_next_character(self, left_context: str, top_k: int = 10) -> tuple:
+    def predict_next_phrase(self, left_context: str, top_k: int = 5, max_tokens: int = 10) -> tuple:
         """
-        Predict next character given left context.
+        Predict next phrase/word given left context.
         Format: \uEE00。\uEE02<leftSideContext>
         
-        This is the format used for next-character prediction in zenz.
+        Returns full phrases like 「ございます」 instead of single characters.
         """
         start_time = time.time()
         
-        # Format for next character prediction (from ZENZ_USAGE_EX.md line 285)
+        # Format for prediction (from ZENZ_USAGE_EX.md)
         prompt = f"{ZENZ_START}。{ZENZ_CONTEXT}{left_context}"
         prompt = self.preprocess_text(prompt)
         
         inputs = self.tokenizer(prompt, return_tensors="pt")
         input_ids = inputs["input_ids"]
         
+        phrases = []
+        probs_list = []
+        
         with torch.no_grad():
             outputs = self.model(input_ids)
             logits = outputs.logits[0, -1, :]
             probs = torch.softmax(logits, dim=-1)
             
-            # Apply repeat penalty (similar to original implementation)
-            token_counts = {}
-            for token_id in input_ids[0].tolist():
-                token_counts[token_id] = token_counts.get(token_id, 0) + 1
-            
-            # Collect predictions
-            predictions = []
-            seen_chars = set()
-            
-            top_probs, top_indices = torch.topk(probs, min(top_k * 5, self.vocab_size))
+            # Get top-k starting tokens
+            top_probs, top_indices = torch.topk(probs, top_k * 3)
             
             for idx, prob in zip(top_indices.tolist(), top_probs.tolist()):
+                if len(phrases) >= top_k:
+                    break
+                
                 token = self.tokenizer.decode([idx])
                 
+                # Skip invalid/special tokens
                 if not self.is_valid_token(token):
                     continue
                 if token in [ZENZ_START, ZENZ_OUTPUT, ZENZ_CONTEXT, ZENZ_EOS, '</s>', '<s>']:
                     continue
                 
-                # Get first character (like original implementation)
-                first_char = token[0] if token else None
-                if first_char and first_char not in seen_chars:
-                    seen_chars.add(first_char)
-                    predictions.append((first_char, prob * 100))
+                # Generate full phrase from this starting token
+                phrase = token
+                combined_prob = prob
+                current_ids = torch.cat([input_ids, torch.tensor([[idx]])], dim=1)
+                
+                # Continue generating until natural break
+                for _ in range(max_tokens - 1):
+                    outputs = self.model(current_ids)
+                    next_logits = outputs.logits[0, -1, :]
+                    next_probs = torch.softmax(next_logits, dim=-1)
+                    next_idx = torch.argmax(next_probs).item()
+                    next_prob = next_probs[next_idx].item()
+                    next_token = self.tokenizer.decode([next_idx])
                     
-                    if len(predictions) >= top_k:
+                    # Stop at EOS or special tokens
+                    if next_token in ['</s>', '<s>'] or ZENZ_EOS in next_token:
                         break
+                    if next_token in [ZENZ_START, ZENZ_OUTPUT, ZENZ_CONTEXT]:
+                        break
+                    if not self.is_valid_token(next_token):
+                        break
+                    
+                    # Stop at punctuation (natural phrase boundary)
+                    if next_token in ['。', '、', '！', '？', '…', '「', '」']:
+                        break
+                    
+                    phrase += next_token
+                    combined_prob *= next_prob
+                    current_ids = torch.cat([current_ids, torch.tensor([[next_idx]])], dim=1)
+                
+                if phrase.strip() and phrase not in phrases:
+                    phrases.append(phrase)
+                    probs_list.append(combined_prob * 100)
         
         inference_time = (time.time() - start_time) * 1000
-        return predictions, inference_time
+        return phrases, probs_list, inference_time
     
     # ========================================
     # Mode 3: Greedy Text Generation
@@ -260,7 +284,7 @@ class JapaneseKeyboardTester:
         print("=" * 60)
         print("Modes:")
         print("  :convert   - Kana-Kanji conversion (default)")
-        print("  :predict   - Next character prediction")
+        print("  :predict   - Next phrase prediction (ありがとう → ございます)")
         print("  :generate  - Free text generation")
         print("")
         print("Commands:")
@@ -295,7 +319,7 @@ class JapaneseKeyboardTester:
                 
                 if user_input.strip().lower() == ':predict':
                     current_mode = "predict"
-                    print("✓ Mode: Next Character Prediction\n")
+                    print("✓ Mode: Next Phrase Prediction\n")
                     continue
                 
                 if user_input.strip().lower() == ':generate':
@@ -324,11 +348,11 @@ class JapaneseKeyboardTester:
                 if user_input.strip().lower() == ':help':
                     print("\nModes:")
                     print("  :convert  - ひらがな → 漢字 (e.g. ありがとう → 有難う)")
-                    print("  :predict  - 次の文字予測 (e.g. 私の名前は → '田', '山', ...)")
+                    print("  :predict  - 次のフレーズ予測 (e.g. ありがとう → ございます)")
                     print("  :generate - テキスト生成")
                     print("\nExamples:")
-                    print("  [変換] ありがとう → 有難う, ありがとう")
-                    print("  [予測] 私の名前は → 田(30%), 山(15%), ...")
+                    print("  [変換] ありがとう → 有難う")
+                    print("  [予測] ありがとう → ございます, ございました")
                     print()
                     continue
                 
@@ -355,13 +379,12 @@ class JapaneseKeyboardTester:
                 elif current_mode == "predict":
                     # Use user input as context for prediction
                     full_context = (context + user_input) if context else user_input
-                    predictions, time_ms = self.predict_next_character(
+                    phrases, probs, time_ms = self.predict_next_phrase(
                         full_context, top_k=current_top_k
                     )
-                    print(f"🔮 Next character predictions for: \"{full_context}\"")
-                    for i, (char, prob) in enumerate(predictions, 1):
-                        full_text = full_context + char
-                        print(f"  {i}. {full_text} [+{char}] ({prob:.2f}%)")
+                    print(f"🔮 Next phrase predictions for: \"{full_context}\"")
+                    for i, (phrase, prob) in enumerate(zip(phrases, probs), 1):
+                        print(f"  {i}. {full_context}{phrase} [+{phrase}] ({prob:.2f}%)")
                     print(f"\n⏱️  {time_ms:.2f} ms")
                 
                 elif current_mode == "generate":

@@ -19,13 +19,13 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 # Available models
 MODELS=(
+    "Miwa-Keita/zenz-v3.1-xsmall"
     "Miwa-Keita/zenz-v2.5-small"
     "Miwa-Keita/zenz-v2.5-xsmall"
-    "Miwa-Keita/zenz-v2-small"
 )
 
 # Default model
-DEFAULT_MODEL="Miwa-Keita/zenz-v2.5-small"
+DEFAULT_MODEL="Miwa-Keita/zenz-v3.1-xsmall"
 
 echo ""
 echo "═══════════════════════════════════════════════════════════"
@@ -61,7 +61,7 @@ if [ -z "$MODEL_NAME" ]; then
         fi
     done
     echo ""
-    read -p "Enter choice (1-${#MODELS[@]}) or model name [default: 1]: " choice
+    read -p "Enter choice (1-${#MODELS[@]}) or press Enter for default: " choice
     
     # Handle choice
     if [ -z "$choice" ]; then
