@@ -22,7 +22,8 @@ let package = Package(
             dependencies: [],
             path: "Sources/MPJPKeyboardSuggestion",
             resources: [
-                .process("Resources/zenz-v3_1-xsmall_coreml.mlpackage"),
+                // Use .copy() for .mlmodelc directory (pre-compiled model for fast loading)
+                .copy("Resources/zenz-v3_1-xsmall_coreml.mlmodelc"),
                 .process("Resources/vocab.json"),
                 .process("Resources/merges.txt"),
             ]

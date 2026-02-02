@@ -17,9 +17,6 @@ final class MPJPModelInference {
     private(set) var vocabSize: Int = 0
     private(set) var isReady: Bool = false
     
-    /// Max tokens to generate per candidate
-    private let maxGenerationLength = 6  // Reduced for lower CPU usage
-    
     private let loadQueue = DispatchQueue(label: "mpjp.model.load", qos: .userInitiated)
     
     // MARK: - Initialization
@@ -35,73 +32,91 @@ final class MPJPModelInference {
             let startTime = CFAbsoluteTimeGetCurrent()
             MPJPLog.info("[Model] Loading zenz model from bundle...")
             
-            // Load vocab.json first (optimized: async-friendly)
-            if let vocabURL = bundle.url(forResource: "vocab", withExtension: "json") {
-                if self.tokenizer.loadVocab(from: vocabURL) {
-                    self.vocabSize = self.tokenizer.vocabSize
-                    MPJPLog.info("[Model] ✅ Loaded vocab: \(self.vocabSize) tokens")
-                } else {
-                    MPJPLog.error("[Model] Failed to load vocab.json, using default")
-                    self.tokenizer.buildDefaultVocab()
+            // Use DispatchGroup for parallel loading
+            let group = DispatchGroup()
+            var vocabLoaded = false
+            var mergesLoaded = false
+            
+            // Load vocab.json in parallel
+            group.enter()
+            DispatchQueue.global(qos: .userInitiated).async {
+                if let vocabURL = bundle.url(forResource: "vocab", withExtension: "json") {
+                    vocabLoaded = self.tokenizer.loadVocab(from: vocabURL)
+                    if vocabLoaded {
+                        self.vocabSize = self.tokenizer.vocabSize
+                    }
                 }
+                group.leave()
+            }
+            
+            // Load BPE merges in parallel
+            group.enter()
+            DispatchQueue.global(qos: .userInitiated).async {
+                if let mergesURL = bundle.url(forResource: "merges", withExtension: "txt") {
+                    mergesLoaded = self.tokenizer.loadMerges(from: mergesURL)
+                }
+                group.leave()
+            }
+            
+            // Load model in parallel (main work)
+            var modelLoadTime: Double = 0
+            group.enter()
+            DispatchQueue.global(qos: .userInitiated).async {
+                // Use .all to let CoreML pick the best compute unit
+                // Note: .cpuOnly causes BNNS errors with GPT-2/Transformer models
+                let config = MLModelConfiguration()
+                config.computeUnits = .all  // Let CoreML choose best hardware
+                
+                let modelStart = CFAbsoluteTimeGetCurrent()
+                
+                // Try compiled model first (.mlmodelc)
+                if let compiledURL = bundle.url(forResource: "zenz-v3_1-xsmall_coreml", withExtension: "mlmodelc") {
+                    MPJPLog.debug("[Model] Found .mlmodelc at: \(compiledURL.path)")
+                    do {
+                        self.model = try MLModel(contentsOf: compiledURL, configuration: config)
+                        modelLoadTime = (CFAbsoluteTimeGetCurrent() - modelStart) * 1000
+                    } catch {
+                        MPJPLog.error("[Model] Failed to load .mlmodelc: \(error)")
+                    }
+                }
+                // Fallback to mlpackage
+                else if let packageURL = bundle.url(forResource: "zenz-v3_1-xsmall_coreml", withExtension: "mlpackage") {
+                    MPJPLog.debug("[Model] Found .mlpackage at: \(packageURL.path)")
+                    do {
+                        let compiledURL = try MLModel.compileModel(at: packageURL)
+                        self.model = try MLModel(contentsOf: compiledURL, configuration: config)
+                        modelLoadTime = (CFAbsoluteTimeGetCurrent() - modelStart) * 1000
+                    } catch {
+                        MPJPLog.error("[Model] Failed to load .mlpackage: \(error)")
+                    }
+                }
+                group.leave()
+            }
+            
+            // Wait for all tasks to complete
+            group.wait()
+            
+            // Log results
+            if vocabLoaded {
+                MPJPLog.info("[Model] ✅ Loaded vocab: \(self.vocabSize) tokens")
             } else {
-                MPJPLog.error("[Model] vocab.json not found in bundle, using default")
+                MPJPLog.error("[Model] Failed to load vocab.json, using default")
                 self.tokenizer.buildDefaultVocab()
             }
             
-            // Load BPE merges (skip if not critical for inference)
-            if let mergesURL = bundle.url(forResource: "merges", withExtension: "txt") {
-                if self.tokenizer.loadMerges(from: mergesURL) {
-                    MPJPLog.info("[Model] ✅ Loaded BPE merges")
-                } else {
-                    MPJPLog.warn("[Model] Failed to load merges.txt (BPE disabled)")
-                }
+            if mergesLoaded {
+                MPJPLog.info("[Model] ✅ Loaded BPE merges")
             } else {
-                MPJPLog.warn("[Model] merges.txt not found (BPE disabled)")
+                MPJPLog.warn("[Model] BPE merges not loaded (disabled)")
             }
             
-            // Configure model for optimal performance
-            let config = MLModelConfiguration()
-            if #available(macOS 13.0, iOS 16.0, *) {
-                config.computeUnits = .cpuAndNeuralEngine  // Use Neural Engine!
+            if self.model != nil {
+                self.isReady = true
+                let totalTime = (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+                MPJPLog.info("[Model] ✅ Loaded in \(String(format: "%.0f", totalTime))ms (model: \(String(format: "%.0f", modelLoadTime))ms)")
             } else {
-                config.computeUnits = .cpuAndGPU
+                MPJPLog.error("[Model] ❌ No model found in bundle")
             }
-            
-            // Try compiled model first (.mlmodelc) - FASTEST
-            if let compiledURL = bundle.url(forResource: "zenz-v3_1-xsmall_coreml", withExtension: "mlmodelc") {
-                MPJPLog.debug("[Model] Found .mlmodelc at: \(compiledURL.path)")
-                do {
-                    self.model = try MLModel(contentsOf: compiledURL, configuration: config)
-                    self.isReady = true
-                    let loadTime = (CFAbsoluteTimeGetCurrent() - startTime) * 1000
-                    MPJPLog.info("[Model] ✅ Loaded compiled model in \(String(format: "%.0f", loadTime))ms")
-                    return
-                } catch {
-                    MPJPLog.error("[Model] Failed to load .mlmodelc: \(error)")
-                }
-            }
-            
-            // Try mlpackage (slower - needs runtime compilation)
-            if let packageURL = bundle.url(forResource: "zenz-v3_1-xsmall_coreml", withExtension: "mlpackage") {
-                MPJPLog.debug("[Model] Found .mlpackage at: \(packageURL.path)")
-                do {
-                    let compileStart = CFAbsoluteTimeGetCurrent()
-                    let compiledURL = try MLModel.compileModel(at: packageURL)
-                    let compileTime = (CFAbsoluteTimeGetCurrent() - compileStart) * 1000
-                    MPJPLog.debug("[Model] Compiled model in \(String(format: "%.0f", compileTime))ms")
-                    
-                    self.model = try MLModel(contentsOf: compiledURL, configuration: config)
-                    self.isReady = true
-                    let totalTime = (CFAbsoluteTimeGetCurrent() - startTime) * 1000
-                    MPJPLog.info("[Model] ✅ Compiled and loaded model in \(String(format: "%.0f", totalTime))ms")
-                    return
-                } catch {
-                    MPJPLog.error("[Model] Failed to compile .mlpackage: \(error)")
-                }
-            }
-            
-            MPJPLog.error("[Model] ❌ No model found in bundle")
         }
     }
     
@@ -196,7 +211,7 @@ final class MPJPModelInference {
         
         // Extend with more tokens for better phrases (limit extensions for CPU)
         if candidates.count > 0 {
-            candidates = extendPhraseCandidates(candidates, inputIds: inputIds, maxExtensions: 3)  // Reduced from 6
+            candidates = extendPhraseCandidates(candidates, inputIds: inputIds, maxExtensions: 6)
         }
         
         MPJPLog.debug("[Predict] Final \(candidates.count) phrases")
@@ -210,8 +225,8 @@ final class MPJPModelInference {
         
         var extended: [(text: String, probability: Float)] = []
         
-        // Only extend top 2 candidates to save CPU/memory
-        for (text, prob) in candidates.prefix(2) {
+        // Extend top 3 candidates for quality
+        for (text, prob) in candidates.prefix(3) {
             let tokenIds = tokenizer.encode(text)
             var currentIds = inputIds + tokenIds
             var currentProb = prob
@@ -248,8 +263,7 @@ final class MPJPModelInference {
     private func extendPhraseCandidates(_ candidates: [(phrase: String, probability: Float)], inputIds: [Int], maxExtensions: Int) -> [(phrase: String, probability: Float)] {
         
         var extended: [(phrase: String, probability: Float)] = []
-                // Only extend top 2 candidates for CPU/memory efficiency
-        for (phrase, prob) in candidates.prefix(2) {
+        for (phrase, prob) in candidates.prefix(3) {
             let tokenIds = tokenizer.encode(phrase)
             var currentIds = inputIds + tokenIds
             var currentProb = prob
