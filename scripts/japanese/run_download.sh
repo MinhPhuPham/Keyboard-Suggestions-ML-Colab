@@ -45,3 +45,38 @@ for arg in "$@"; do
 done
 
 python "$SCRIPT_DIR/download_convert_zenz_coreml.py" "${ARGS[@]}"
+
+# Step 2: Compile .mlpackage to .mlmodelc for faster loading
+echo ""
+echo "═══════════════════════════════════════════════════════════"
+echo "📦 Compiling to .mlmodelc (for fast iOS loading)..."
+echo "═══════════════════════════════════════════════════════════"
+
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+MODELS_DIR="$PROJECT_ROOT/models/japanese"
+
+# Find all .mlpackage files and compile them
+for mlpackage in "$MODELS_DIR"/*.mlpackage; do
+    if [ -f "$mlpackage/Manifest.json" ]; then
+        # Get basename without extension
+        basename=$(basename "$mlpackage" .mlpackage)
+        output_dir="$MODELS_DIR/${basename}.mlmodelc"
+        
+        echo "   Compiling: $(basename "$mlpackage")"
+        
+        # Remove old .mlmodelc if exists
+        [ -d "$output_dir" ] && rm -rf "$output_dir"
+        
+        # Compile using xcrun
+        if xcrun coremlcompiler compile "$mlpackage" "$MODELS_DIR" 2>/dev/null; then
+            echo "   ✅ Created: $(basename "$output_dir")"
+        else
+            echo "   ⚠️ Compilation failed (xcrun not available or error)"
+        fi
+    fi
+done
+
+echo ""
+echo "═══════════════════════════════════════════════════════════"
+echo "✅ Done! Models ready for iOS deployment."
+echo "═══════════════════════════════════════════════════════════"

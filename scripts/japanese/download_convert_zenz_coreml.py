@@ -138,39 +138,51 @@ def step_2_convert_to_coreml():
     
     import torch
     import coremltools as ct
+    import numpy as np
     from transformers import GPT2LMHeadModel
     
     # Get vocab size from config
     vocab_size = get_vocab_size_from_config()
     
-    # Load model with torchscript=True for compatibility
-    print("Loading model with torchscript=True...")
-    base_model = GPT2LMHeadModel.from_pretrained(LOCAL_MODEL_DIR, torchscript=True)
+    # Load model WITHOUT torchscript flag to avoid weight initialization issues
+    print("Loading model...")
+    base_model = GPT2LMHeadModel.from_pretrained(
+        LOCAL_MODEL_DIR,
+        torchscript=False  # Load normally first
+    )
+    
+    # Tie weights to fix "lm_head.weight not initialized" warning
+    base_model.tie_weights()
+    
+    # Set to eval mode BEFORE wrapping
     base_model.eval()
     
     # Wrap the model to return only logits
     print("📦 Wrapping model for clean tracing...")
     model = GPT2TraceWrapper(base_model)
+    model.eval()  # Also set wrapper to eval mode
     
-    # Create dummy input
+    # Create dummy input with int32 to help reduce int64 operations
     SEQ_LEN = 128
-    dummy_input = torch.randint(0, vocab_size, (1, SEQ_LEN))
+    # Use long (int64) for tracing (required by embedding layer) but convert later
+    dummy_input = torch.randint(0, vocab_size, (1, SEQ_LEN), dtype=torch.long)
     
     print(f"   Input shape: {dummy_input.shape}")
     print(f"   Vocab size: {vocab_size}")
     
-    # Trace the model
+    # Trace the model with check_trace=False to avoid tracer warnings
     print("\n📦 Tracing model with torch.jit.trace...")
     start_time = time.time()
     
-    traced_model = torch.jit.trace(model, dummy_input)
+    with torch.no_grad():
+        traced_model = torch.jit.trace(model, dummy_input, check_trace=False)
     
     # Convert to CoreML
     print("   Converting traced model to CoreML...")
     mlmodel = ct.convert(
         traced_model,
-        inputs=[ct.TensorType(name="input_ids", shape=dummy_input.shape, dtype=int)],
-        outputs=[ct.TensorType(name="logits")],  # Now matches wrapper output!
+        inputs=[ct.TensorType(name="input_ids", shape=(1, ct.RangeDim(1, 512)), dtype=np.int32)],
+        outputs=[ct.TensorType(name="logits")],
         minimum_deployment_target=ct.target.iOS16,
         convert_to='mlprogram'
     )

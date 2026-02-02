@@ -113,6 +113,24 @@ if [ "$NEED_DOWNLOAD" = true ]; then
     python "$SCRIPT_DIR/download_convert_zenz_coreml.py" $FORCE_FLAG --model-name "$MODEL_NAME" --skip-coreml
 fi
 
+# Step 1.5: Optionally compile to .mlmodelc if .mlpackage exists
+MLPACKAGE_PATH="$MODELS_DIR/${MODEL_SHORT_NAME}_coreml.mlpackage"
+if [ -d "$MLPACKAGE_PATH" ]; then
+    echo ""
+    echo "═══════════════════════════════════════════════════════════"
+    echo "Step 1.5: Compiling to .mlmodelc (for fast iOS loading)..."
+    echo "═══════════════════════════════════════════════════════════"
+    
+    MLMODELC_PATH="$MODELS_DIR/${MODEL_SHORT_NAME}_coreml.mlmodelc"
+    [ -d "$MLMODELC_PATH" ] && rm -rf "$MLMODELC_PATH"
+    
+    if xcrun coremlcompiler compile "$MLPACKAGE_PATH" "$MODELS_DIR" 2>/dev/null; then
+        echo "   ✅ Created: $(basename "$MLMODELC_PATH")"
+    else
+        echo "   ⚠️ Compilation failed (will use .mlpackage at runtime)"
+    fi
+fi
+
 # Step 2: Run test
 echo ""
 echo "═══════════════════════════════════════════════════════════"

@@ -3,14 +3,15 @@
 numpy<2.0
 
 # --- PyTorch Stack ---
-# Torch 2.2.x is the most stable sweet spot for CoreMLTools 7.2/8.0
-torch==2.2.2
-torchvision==0.17.2
+# Torch 2.4.0 is officially supported by coremltools 8.x/9.x
+torch==2.4.0
+torchvision==0.19.0
 
 # --- Hugging Face ---
-# 4.38.2 is known to trace GPT-2 correctly without "Strict" errors
-transformers==4.38.2
+# 4.39.0+ fixes _is_quantized_training_enabled deprecation warning
+# <4.44 avoids __ior__ op CoreML conversion error
+transformers>=4.39.0,<4.44.0
 
 # --- CoreML ---
-# Use 8.0+ for Python 3.11 support (7.2 is flaky on 3.11)
-coremltools==8.0b1
+# coremltools 8.x officially supports torch 2.4.0
+coremltools>=8.0,<9.0
