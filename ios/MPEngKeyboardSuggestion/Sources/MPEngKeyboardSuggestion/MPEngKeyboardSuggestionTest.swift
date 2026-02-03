@@ -1,26 +1,26 @@
 //
-//  MPJPKeyboardSuggestionTest.swift
-//  MPJPKeyboardSuggestion
+//  MPEngKeyboardSuggestionTest.swift
+//  MPEngKeyboardSuggestion
 //
-//  Created by MinhPhuPham on 02/02/26.
+//  Created by MinhPhuPham on 03/02/26.
 //
 
 import SwiftUI
 import Combine
-import MPJPKeyboardSuggestion
 
-/// SwiftUI test view for Japanese keyboard suggestions
+/// SwiftUI test view for English keyboard suggestions
 /// Supports manual input and automatic testing with performance logging
-public struct MPJPKeyboardSuggestionTest: View {
-    @State var testMode: TestMode = .manual
-    @StateObject var sharedVM = SharedTestViewModel()
+@available(iOS 14.0, macOS 11.0, *)
+public struct MPEngKeyboardSuggestionTest: View {
+    @State var testMode: EngTestMode = .manual
+    @StateObject var sharedVM = EngSharedTestViewModel()
     
     public init() {}
     
     public var body: some View {
         VStack(spacing: 0) {
             // Header
-            Text("🇯🇵 Japanese Keyboard Test")
+            Text("🇬🇧 English Keyboard Test")
                 .font(.headline)
                 .padding()
             
@@ -33,53 +33,60 @@ public struct MPJPKeyboardSuggestionTest: View {
                     .font(.caption)
                     .foregroundColor(.secondary)
                 Spacer()
+                if let vocabSize = sharedVM.vocabSize {
+                    Text("Vocab: \(vocabSize)")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
             }
             .padding(.horizontal)
             .padding(.bottom, 8)
             
             // Mode Picker
             Picker("Test Mode", selection: $testMode) {
-                Text("Manual").tag(TestMode.manual)
-                Text("Automatic").tag(TestMode.automatic)
+                Text("Manual").tag(EngTestMode.manual)
+                Text("Automatic").tag(EngTestMode.automatic)
             }
             .pickerStyle(.segmented)
             .padding(.horizontal)
             .padding(.bottom, 16)
             
             // Content based on mode
-            contentView
+            engContentView
                 .environmentObject(sharedVM)
                 .id(testMode)
         }
     }
     
     @ViewBuilder
-    var contentView: some View {
+    var engContentView: some View {
         switch testMode {
         case .manual:
-            ManualTestView()
+            EngManualTestView()
         case .automatic:
-            AutomaticTestView()
+            EngAutomaticTestView()
         }
     }
 }
 
 // MARK: - Test Mode Enum
 
-enum TestMode: Int, Hashable {
+enum EngTestMode: Int, Hashable {
     case manual = 0
     case automatic = 1
 }
 
 // MARK: - Manual Test View
-struct ManualTestView: View {
-    @EnvironmentObject var viewModel: SharedTestViewModel
+
+@available(iOS 14.0, macOS 11.0, *)
+struct EngManualTestView: View {
+    @EnvironmentObject var viewModel: EngSharedTestViewModel
     
     var body: some View {
         VStack(spacing: 16) {
             // Input Field with Search Button
             HStack {
-                TextField("ひらがなを入力", text: $viewModel.inputText)
+                TextField("Type in English", text: $viewModel.inputText)
                     .textFieldStyle(.roundedBorder)
                 
                 Button(action: {
@@ -117,7 +124,7 @@ struct ManualTestView: View {
                         }
                         .padding()
                     } else if viewModel.suggestions.isEmpty {
-                        Text("Enter hiragana and tap 🔍 to see suggestions")
+                        Text("Type something and tap 🔍 to see suggestions")
                             .foregroundColor(.secondary)
                             .padding()
                     } else {
@@ -126,17 +133,17 @@ struct ManualTestView: View {
                                 Text("\(index + 1).")
                                     .foregroundColor(.secondary)
                                     .frame(width: 24)
-                                Text(suggestion.text)
+                                Text(suggestion.word)
                                     .font(.body)
                                 Spacer()
-                                Text(suggestion.type == .kanaToKanji ? "変換" : "予測")
+                                Text(suggestion.source.rawValue)
                                     .font(.caption2)
                                     .padding(.horizontal, 6)
                                     .padding(.vertical, 2)
-                                    .background(suggestion.type == .kanaToKanji ? Color.blue.opacity(0.2) : Color.green.opacity(0.2))
-                                    .foregroundColor(suggestion.type == .kanaToKanji ? .blue : .green)
+                                    .background(sourceColor(suggestion.source).opacity(0.2))
+                                    .foregroundColor(sourceColor(suggestion.source))
                                     .cornerRadius(4)
-                                Text("\(String(format: "%.0f", suggestion.probability * 100))%")
+                                Text("\(String(format: "%.0f", suggestion.score))pt")
                                     .font(.caption)
                                     .foregroundColor(.secondary)
                             }
@@ -153,12 +160,24 @@ struct ManualTestView: View {
             Spacer()
         }
     }
+    
+    private func sourceColor(_ source: MPSuggestionSource) -> Color {
+        switch source {
+        case .gru: return .blue
+        case .trie: return .purple
+        case .learning: return .green
+        case .typo: return .orange
+        case .shortcut: return .pink
+        case .hybrid: return Color(red: 0.0, green: 0.8, blue: 0.8) // Cyan-like color for macOS 11 compatibility
+        }
+    }
 }
 
 // MARK: - Automatic Test View
 
-struct AutomaticTestView: View {
-    @EnvironmentObject var viewModel: SharedTestViewModel
+@available(iOS 14.0, macOS 11.0, *)
+struct EngAutomaticTestView: View {
+    @EnvironmentObject var viewModel: EngSharedTestViewModel
     
     var body: some View {
         VStack(spacing: 16) {
@@ -173,7 +192,7 @@ struct AutomaticTestView: View {
                         Text("Testing \(viewModel.autoProgress)/\(viewModel.testCases.count)...")
                     } else {
                         Image(systemName: "play.fill")
-                        Text("Run 50 Test Cases")
+                        Text("Run \(viewModel.testCases.count) Test Cases")
                     }
                 }
                 .frame(maxWidth: .infinity)
@@ -188,10 +207,10 @@ struct AutomaticTestView: View {
             // Results Summary
             if !viewModel.autoResults.isEmpty {
                 HStack(spacing: 16) {
-                    StatBox(value: "\(viewModel.autoResults.count)", label: "Tests", color: .blue)
-                    StatBox(value: "\(String(format: "%.0f", viewModel.avgTime))ms", label: "Avg", color: .purple)
-                    StatBox(value: "\(String(format: "%.0f", viewModel.minTime))ms", label: "Min", color: .green)
-                    StatBox(value: "\(String(format: "%.0f", viewModel.maxTime))ms", label: "Max", color: .red)
+                    EngStatBox(value: "\(viewModel.autoResults.count)", label: "Tests", color: .blue)
+                    EngStatBox(value: "\(String(format: "%.0f", viewModel.avgTime))ms", label: "Avg", color: .purple)
+                    EngStatBox(value: "\(String(format: "%.0f", viewModel.minTime))ms", label: "Min", color: .green)
+                    EngStatBox(value: "\(String(format: "%.0f", viewModel.maxTime))ms", label: "Max", color: .red)
                 }
                 .padding(.horizontal)
             }
@@ -246,7 +265,8 @@ struct AutomaticTestView: View {
 
 // MARK: - Stat Box
 
-struct StatBox: View {
+@available(iOS 14.0, macOS 11.0, *)
+struct EngStatBox: View {
     let value: String
     let label: String
     let color: Color
@@ -269,41 +289,67 @@ struct StatBox: View {
 
 // MARK: - Shared ViewModel (Single keyboard instance)
 
-class SharedTestViewModel: ObservableObject {
+@available(iOS 14.0, macOS 11.0, *)
+class EngSharedTestViewModel: ObservableObject {
     // Manual test state
     @Published var inputText = ""
-    @Published var suggestions: [MPJPPrediction] = []
+    @Published var suggestions: [MPSuggestion] = []
     @Published var responseTime: Double?
     @Published var isLoading = false
     
     // Automatic test state
-    @Published var autoResults: [TestResult] = []
+    @Published var autoResults: [EngTestResult] = []
     @Published var isAutoTestRunning = false
     @Published var autoProgress = 0
     
     // Shared model state
     @Published var isModelReady = false
+    @Published var vocabSize: Int?
     
     // Single keyboard instance
-    var keyboard: MPJPKeyboardSuggestion?
+    var keyboard: MPKeyboardSuggestion?
     
     // Debounce support
     private var cancellables = Set<AnyCancellable>()
     
-    // Request cancellation - prevents overlapping inference calls
+    // Request cancellation
     private var currentFetchTask: DispatchWorkItem?
     
+    // Test cases for English
     let testCases = [
-        "ありがとう", "こんにちは", "おはよう", "さようなら", "すみません",
-        "おねがいします", "わかりました", "たべる", "のむ", "いく",
-        "くる", "みる", "きく", "かく", "よむ",
-        "はなす", "あるく", "はしる", "およぐ", "とぶ",
-        "おはようございます", "こんばんは", "おやすみなさい", "いただきます", "ごちそうさま",
-        "はじめまして", "よろしく", "ごめんなさい", "だいじょうぶ", "ちょっとまって",
-        "アリガトウ", "コンニチハ", "オハヨウ", "サヨウナラ", "スミマセン",
-        "きょうは", "あしたは", "いま", "ここ", "そこ",
-        "たのしい", "うれしい", "かなしい", "おいしい", "あたらしい",
-        "ふるい", "おおきい", "ちいさい", "ながい", "みじかい"
+        // Next-word prediction (ends with space)
+        "How are ",
+        "I want to ",
+        "Thank you for ",
+        "What is the ",
+        "Can you ",
+        "Please let me ",
+        "Would you like ",
+        "I think that ",
+        "We should ",
+        "They said ",
+        // Word completion (partial words)
+        "hel",
+        "tha",
+        "beau",
+        "imp",
+        "com",
+        "prog",
+        "dev",
+        "app",
+        "key",
+        "sug",
+        // Typo correction
+        "thers",
+        "becuase",
+        "definately",
+        "occured",
+        "recieve",
+        "seperate",
+        "occassion",
+        "accomodate",
+        "neccessary",
+        "enviroment"
     ]
     
     var avgTime: Double {
@@ -316,10 +362,10 @@ class SharedTestViewModel: ObservableObject {
     init() {
         // Initialize keyboard once
         DispatchQueue.main.async { [weak self] in
-            self?.keyboard = MPJPKeyboardSuggestion()
-            print("✅ MPJPKeyboardSuggestion initialized (single instance)")
+            self?.keyboard = MPKeyboardSuggestion()
+            print("✅ MPKeyboardSuggestion (English) initialized")
             
-            // Check ready state with retry
+            // Check ready state
             self?.checkModelReady()
         }
         
@@ -345,13 +391,16 @@ class SharedTestViewModel: ObservableObject {
     
     func checkModelReady() {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-            guard let self = self else { return }
-            self.isModelReady = self.keyboard?.isReady ?? false
+            guard let self = self, let keyboard = self.keyboard else { return }
+            
+            let stats = keyboard.getStats()
+            self.isModelReady = stats.gruReady
+            self.vocabSize = stats.vocabSize
             
             if !self.isModelReady {
                 self.checkModelReady() // Retry
             } else {
-                print("✅ Model is ready!")
+                print("✅ English Model is ready! Vocab: \(stats.vocabSize)")
             }
         }
     }
@@ -359,20 +408,19 @@ class SharedTestViewModel: ObservableObject {
     // MARK: - Manual Test
     
     func fetchSuggestions() {
-        guard !inputText.isEmpty, let keyboard = keyboard else { 
+        guard !inputText.isEmpty, let keyboard = keyboard else {
             suggestions = []
             isLoading = false
-            return 
+            return
         }
         
-        // Cancel any previous in-flight request to prevent overlapping work
+        // Cancel any previous in-flight request
         currentFetchTask?.cancel()
         
         isLoading = true
         let input = inputText
         
         let workItem = DispatchWorkItem { [weak self] in
-            // Check if cancelled before starting expensive work
             guard !(self?.currentFetchTask?.isCancelled ?? true) else {
                 DispatchQueue.main.async {
                     self?.isLoading = false
@@ -381,10 +429,9 @@ class SharedTestViewModel: ObservableObject {
             }
             
             let start = CFAbsoluteTimeGetCurrent()
-            let results = keyboard.getSuggestions(for: input, limit: 5)  // Reduced from 10
+            let results = keyboard.getSuggestions(for: input, limit: 5)
             let time = (CFAbsoluteTimeGetCurrent() - start) * 1000
             
-            // Only update UI if not cancelled
             guard !(self?.currentFetchTask?.isCancelled ?? true) else { return }
             
             DispatchQueue.main.async {
@@ -418,9 +465,9 @@ class SharedTestViewModel: ObservableObject {
                 let predictions = keyboard.getSuggestions(for: testCase, limit: 5)
                 let time = (CFAbsoluteTimeGetCurrent() - start) * 1000
                 
-                let result = TestResult(
+                let result = EngTestResult(
                     input: testCase,
-                    outputs: predictions.map(\.text),
+                    outputs: predictions.map(\.word),
                     time: time
                 )
                 
@@ -441,7 +488,7 @@ class SharedTestViewModel: ObservableObject {
 
 // MARK: - Test Result Model
 
-struct TestResult: Identifiable {
+struct EngTestResult: Identifiable {
     let id = UUID()
     let input: String
     let outputs: [String]

@@ -50,6 +50,8 @@ models/*
 *.mlmodel
 *.tflite
 *.h5
+*.mil
+*.plist
 checkpoints/
 
 # Compressed files
