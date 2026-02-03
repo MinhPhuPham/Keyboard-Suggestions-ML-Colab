@@ -315,9 +315,9 @@ class EngSharedTestViewModel: ObservableObject {
     // Request cancellation
     private var currentFetchTask: DispatchWorkItem?
     
-    // Test cases for English
+    // Test cases for English (50 cases)
     let testCases = [
-        // Next-word prediction (ends with space)
+        // Next-word prediction (ends with space) - 20 cases
         "How are ",
         "I want to ",
         "Thank you for ",
@@ -328,7 +328,17 @@ class EngSharedTestViewModel: ObservableObject {
         "I think that ",
         "We should ",
         "They said ",
-        // Word completion (partial words)
+        "It is a ",
+        "I have been ",
+        "The best way ",
+        "Do you know ",
+        "Let me show ",
+        "Could you please ",
+        "I am going ",
+        "This is the ",
+        "Have you ever ",
+        "She wants to ",
+        // Word completion (partial words) - 15 cases
         "hel",
         "tha",
         "beau",
@@ -339,7 +349,12 @@ class EngSharedTestViewModel: ObservableObject {
         "app",
         "key",
         "sug",
-        // Typo correction
+        "int",
+        "str",
+        "fun",
+        "pro",
+        "con",
+        // Typo correction - 15 cases
         "thers",
         "becuase",
         "definately",
@@ -349,7 +364,12 @@ class EngSharedTestViewModel: ObservableObject {
         "occassion",
         "accomodate",
         "neccessary",
-        "enviroment"
+        "enviroment",
+        "wierd",
+        "untill",
+        "begining",
+        "occurence",
+        "tommorow"
     ]
     
     var avgTime: Double {
