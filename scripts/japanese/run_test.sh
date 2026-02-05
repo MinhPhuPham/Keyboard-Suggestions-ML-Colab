@@ -12,8 +12,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(dirname "$(dirname "$SCRIPT_DIR")")"
 VENV_DIR="$SCRIPT_DIR/.venv"
-DEFAULT_MODEL_DIR="$PROJECT_ROOT/models/japanese/zenz-v2.5-small"
-
+DEFAULT_MODEL_DIR="$PROJECT_ROOT/models/japanese/zenz-v3.1-xsmall"
 # Check if venv exists
 if [ ! -d "$VENV_DIR" ]; then
     echo "❌ Virtual environment not found!"

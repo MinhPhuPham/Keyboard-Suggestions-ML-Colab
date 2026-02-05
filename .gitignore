@@ -53,6 +53,7 @@ models/*
 *.mil
 *.plist
 checkpoints/
+.gradle/
 
 # Compressed files
 *.zip
