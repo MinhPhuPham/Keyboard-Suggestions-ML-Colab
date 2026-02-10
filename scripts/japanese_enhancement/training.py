@@ -172,6 +172,9 @@ def train_multitask(model, datasets, info, num_epochs=None):
     Alternates between KKC and NWP batches each step,
     combined through shared encoder.
 
+    IMPORTANT: Caller must wrap this function call inside
+    strategy.scope() for GPU/TPU training.
+
     Args:
         model: compiled multi-task model
         datasets: (kkc_train_ds, kkc_val_ds, nwp_train_ds, nwp_val_ds)
