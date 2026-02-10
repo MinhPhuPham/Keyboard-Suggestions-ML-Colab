@@ -68,34 +68,29 @@ def build_kkc_encoder(char_vocab_size, name_prefix='kkc'):
     )
 
     # Stacked Bi-GRU layers with LayerNorm after EVERY layer
+    # NOTE: return_state=True is broken in Keras 3 / TF 2.16+ (produces
+    # 1D state tensors). All layers use return_state=False instead.
     for i in range(config.NUM_ENCODER_LAYERS):
-        is_last = (i == config.NUM_ENCODER_LAYERS - 1)
         x = Bidirectional(
             GRU(
                 config.GRU_UNITS,
                 return_sequences=True,
-                return_state=is_last,
                 name=f'{name_prefix}_enc_gru_{i}'
             ),
             name=f'{name_prefix}_enc_bigru_{i}'
         )(x)
+        x = LayerNormalization(name=f'{name_prefix}_enc_norm_{i}')(x)
 
-        if is_last:
-            # Bidirectional returns: [output, fwd_state, bwd_state]
-            encoder_output = x[0]
-            fwd_state = x[1]
-            bwd_state = x[2]
-            # LayerNorm on last layer too (matches original)
-            encoder_output = LayerNormalization(
-                name=f'{name_prefix}_enc_norm_{i}'
-            )(encoder_output)
-            # Concatenate states for decoder init
-            encoder_state = Concatenate(
-                name=f'{name_prefix}_state_concat'
-            )([fwd_state, bwd_state])
-        else:
-            # LayerNorm between stacked layers
-            x = LayerNormalization(name=f'{name_prefix}_enc_norm_{i}')(x)
+    encoder_output = x  # (batch, seq_len, GRU_UNITS*2)
+
+    # Derive encoder state from last timestep of encoder output.
+    # Dense projection: (batch, GRU_UNITS*2) → (batch, GRU_UNITS*2)
+    # This replaces the broken return_state + Concatenate pattern.
+    encoder_state = Dense(
+        config.GRU_UNITS * 2,
+        activation='tanh',
+        name=f'{name_prefix}_state_proj'
+    )(encoder_output[:, -1, :])  # slice last step → (batch, GRU_UNITS*2)
 
     return encoder_input, encoder_output, encoder_state, char_embedding
 
