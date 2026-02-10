@@ -26,7 +26,7 @@ from tensorflow.keras.models import Model
 from tensorflow.keras.layers import (
     Input, Embedding, GRU, Dense, Dropout,
     Bidirectional, Attention, Concatenate,
-    LayerNormalization,
+    LayerNormalization, RepeatVector,
 )
 
 from . import config
@@ -93,13 +93,6 @@ def build_kkc_encoder(char_vocab_size, name_prefix='kkc'):
             encoder_state = Concatenate(
                 name=f'{name_prefix}_state_concat'
             )([fwd_state, bwd_state])
-            # Dense bridge: ensures (batch, units*2) shape is preserved
-            # across TF/Keras versions (fixes 1D state bug in Keras 3)
-            encoder_state = Dense(
-                config.GRU_UNITS * 2,
-                activation='tanh',
-                name=f'{name_prefix}_state_bridge'
-            )(encoder_state)
         else:
             # LayerNorm between stacked layers
             x = LayerNormalization(name=f'{name_prefix}_enc_norm_{i}')(x)
@@ -135,6 +128,17 @@ def build_kkc_head(encoder_output, encoder_state, char_vocab_size,
         config.DROPOUT_RATE, name='kkc_dec_emb_drop'
     )(char_embedding(decoder_input))
 
+    # Inject encoder state via context injection (avoids initial_state bug
+    # in Keras 3 / TF 2.16+ where GRU receives 1D state instead of 2D).
+    # RepeatVector tiles encoder_state across all decoder timesteps,
+    # then Concatenate merges it with decoder embeddings.
+    tiled_state = RepeatVector(
+        config.MAX_DECODER_LEN, name='kkc_state_tile'
+    )(encoder_state)  # (batch, dec_len, GRU_UNITS*2)
+    dec_out = Concatenate(
+        name='kkc_dec_state_concat'
+    )([dec_out, tiled_state])  # (batch, dec_len, EMBEDDING_DIM + GRU_UNITS*2)
+
     # Stacked GRU decoder with LayerNorm after each layer
     for i in range(config.NUM_DECODER_LAYERS):
         gru_layer = GRU(
@@ -142,13 +146,7 @@ def build_kkc_head(encoder_output, encoder_state, char_vocab_size,
             return_sequences=True,
             name=f'kkc_dec_gru_{i}',
         )
-
-        if i == 0:
-            # Only first decoder GRU receives encoder state (as list)
-            dec_out = gru_layer(dec_out, initial_state=[encoder_state])
-        else:
-            # Subsequent layers use default zero state
-            dec_out = gru_layer(dec_out)
+        dec_out = gru_layer(dec_out)
 
         # LayerNorm after each decoder GRU (matches original)
         dec_out = LayerNormalization(name=f'kkc_dec_norm_{i}')(dec_out)
