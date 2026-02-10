@@ -93,6 +93,13 @@ def build_kkc_encoder(char_vocab_size, name_prefix='kkc'):
             encoder_state = Concatenate(
                 name=f'{name_prefix}_state_concat'
             )([fwd_state, bwd_state])
+            # Dense bridge: ensures (batch, units*2) shape is preserved
+            # across TF/Keras versions (fixes 1D state bug in Keras 3)
+            encoder_state = Dense(
+                config.GRU_UNITS * 2,
+                activation='tanh',
+                name=f'{name_prefix}_state_bridge'
+            )(encoder_state)
         else:
             # LayerNorm between stacked layers
             x = LayerNormalization(name=f'{name_prefix}_enc_norm_{i}')(x)
@@ -137,8 +144,8 @@ def build_kkc_head(encoder_output, encoder_state, char_vocab_size,
         )
 
         if i == 0:
-            # Only first decoder GRU receives encoder state
-            dec_out = gru_layer(dec_out, initial_state=encoder_state)
+            # Only first decoder GRU receives encoder state (as list)
+            dec_out = gru_layer(dec_out, initial_state=[encoder_state])
         else:
             # Subsequent layers use default zero state
             dec_out = gru_layer(dec_out)
