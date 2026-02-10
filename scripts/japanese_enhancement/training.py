@@ -284,7 +284,7 @@ def train_multitask(model, datasets, info, num_epochs=None):
                     f"  step {step}/{train_steps} | "
                     f"loss={total_loss:.4f} "
                     f"kkc={kkc_loss:.4f} nwp={nwp_loss:.4f}",
-                    end='\r'
+                    flush=True
                 )
 
         # --- Validation ---
