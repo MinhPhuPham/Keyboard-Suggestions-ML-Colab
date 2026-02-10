@@ -89,7 +89,7 @@ SEP_TOKEN = '<SEP>'
 BATCH_SIZE = 512              # Per GPU (scaled by strategy)
 FORCE_REBUILD_CACHE = False
 KKC_LOSS_WEIGHT = 1.0        # KKC task weight
-NWP_LOSS_WEIGHT = 0.3        # NWP task weight
+NWP_LOSS_WEIGHT = 1.0        # NWP task weight (equal to KKC)
 LEARNING_RATE = 1e-3
 
 # ===========================================================

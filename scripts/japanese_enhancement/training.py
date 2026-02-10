@@ -2,6 +2,7 @@
 Training utilities for Multi-Task GRU.
 Dataset creation, callbacks, and training orchestration.
 """
+import sys
 import numpy as np
 import tensorflow as tf
 from tensorflow.keras.callbacks import (
@@ -166,11 +167,22 @@ def get_callbacks():
 # CUSTOM TRAINING LOOP
 # ===========================================================
 
+def _top_k_accuracy(y_true, y_pred, k=5):
+    """Compute top-k accuracy (useful for large vocabs where top-1 is too strict)."""
+    top_k = tf.math.in_top_k(
+        targets=tf.cast(y_true, tf.int32),
+        predictions=y_pred,
+        k=k
+    )
+    return tf.reduce_mean(tf.cast(top_k, tf.float32))
+
+
 def train_multitask(model, datasets, info, num_epochs=None):
     """Custom training loop for multi-task model.
 
-    Alternates between KKC and NWP batches each step,
-    combined through shared encoder.
+    Uses SINGLE forward pass per step: feeds real KKC and NWP data
+    simultaneously. Both heads are independent (no shared weights),
+    so this is equivalent to training them separately but faster.
 
     IMPORTANT: Caller must wrap this function call inside
     strategy.scope() for GPU/TPU training.
@@ -202,64 +214,58 @@ def train_multitask(model, datasets, info, num_epochs=None):
 
     history = {
         'loss': [], 'kkc_loss': [], 'nwp_loss': [],
-        'kkc_accuracy': [], 'nwp_accuracy': [],
+        'kkc_accuracy': [], 'nwp_accuracy': [], 'nwp_top5_accuracy': [],
         'val_loss': [], 'val_kkc_loss': [], 'val_nwp_loss': [],
-        'val_kkc_accuracy': [], 'val_nwp_accuracy': [],
+        'val_kkc_accuracy': [], 'val_nwp_accuracy': [], 'val_nwp_top5_accuracy': [],
     }
 
     best_val_loss = float('inf')
     patience_counter = 0
     patience = 5
 
+    # Force unbuffered stdout for Colab (imported modules are buffered)
+    sys.stdout.reconfigure(line_buffering=True)
+
     for epoch in range(num_epochs):
+        print(f"\n{'='*60}", flush=True)
+        print(f"  Epoch {epoch+1}/{num_epochs}", flush=True)
+        print(f"{'='*60}", flush=True)
         # --- Training ---
         epoch_kkc_loss = tf.keras.metrics.Mean()
         epoch_nwp_loss = tf.keras.metrics.Mean()
         epoch_total_loss = tf.keras.metrics.Mean()
         epoch_kkc_acc = tf.keras.metrics.Mean()  # Masked accuracy (ignores PAD)
         epoch_nwp_acc = tf.keras.metrics.SparseCategoricalAccuracy()
+        epoch_nwp_top5 = tf.keras.metrics.Mean()
 
         for step in range(train_steps):
-            # Get batches
+            # Get batches from both heads
             kkc_enc, kkc_dec_in, kkc_dec_tgt = next(kkc_train_iter)
             nwp_x, nwp_y = next(nwp_train_iter)
 
+            # Align batch sizes (KKC and NWP may have different batch sizes)
+            min_batch = tf.minimum(tf.shape(kkc_enc)[0], tf.shape(nwp_x)[0])
+            kkc_enc = kkc_enc[:min_batch]
+            kkc_dec_in = kkc_dec_in[:min_batch]
+            kkc_dec_tgt = kkc_dec_tgt[:min_batch]
+            nwp_x = nwp_x[:min_batch]
+            nwp_y = nwp_y[:min_batch]
+
             with tf.GradientTape() as tape:
-                # KKC forward pass (NWP input = zeros, not used by NWP head)
-                nwp_dummy = tf.zeros(
-                    (tf.shape(kkc_enc)[0], config.MAX_WORD_CONTEXT),
-                    dtype=tf.int32
-                )
-                kkc_pred, _ = model(
+                # SINGLE forward pass with REAL data for both heads
+                kkc_pred, nwp_pred = model(
                     {
                         'encoder_input': kkc_enc,
                         'decoder_input': kkc_dec_in,
-                        'nwp_input': nwp_dummy,
-                    },
-                    training=True
-                )
-                kkc_loss = kkc_loss_fn(kkc_dec_tgt, kkc_pred)
-
-                # NWP forward pass (KKC inputs = zeros, not used by KKC head)
-                enc_dummy = tf.zeros(
-                    (tf.shape(nwp_x)[0], config.MAX_ENCODER_LEN),
-                    dtype=tf.int32
-                )
-                dec_dummy = tf.zeros(
-                    (tf.shape(nwp_x)[0], config.MAX_DECODER_LEN),
-                    dtype=tf.int32
-                )
-                _, nwp_pred = model(
-                    {
-                        'encoder_input': enc_dummy,
-                        'decoder_input': dec_dummy,
                         'nwp_input': nwp_x,
                     },
                     training=True
                 )
+
+                kkc_loss = kkc_loss_fn(kkc_dec_tgt, kkc_pred)
                 nwp_loss = nwp_loss_fn(nwp_y, nwp_pred)
 
-                # Combined loss
+                # Combined loss (equal weights)
                 total_loss = (
                     config.KKC_LOSS_WEIGHT * kkc_loss +
                     config.NWP_LOSS_WEIGHT * nwp_loss
@@ -278,6 +284,7 @@ def train_multitask(model, datasets, info, num_epochs=None):
             # Masked accuracy for KKC (ignores PAD tokens)
             epoch_kkc_acc.update_state(masked_accuracy(kkc_dec_tgt, kkc_pred))
             epoch_nwp_acc.update_state(nwp_y, nwp_pred)
+            epoch_nwp_top5.update_state(_top_k_accuracy(nwp_y, nwp_pred, k=5))
 
             if step % 50 == 0:
                 print(
@@ -293,38 +300,25 @@ def train_multitask(model, datasets, info, num_epochs=None):
         val_total_loss = tf.keras.metrics.Mean()
         val_kkc_acc = tf.keras.metrics.Mean()  # Masked accuracy (ignores PAD)
         val_nwp_acc = tf.keras.metrics.SparseCategoricalAccuracy()
+        val_nwp_top5 = tf.keras.metrics.Mean()
 
         for _ in range(val_steps):
             kkc_enc, kkc_dec_in, kkc_dec_tgt = next(kkc_val_iter)
             nwp_x, nwp_y = next(nwp_val_iter)
 
-            # KKC validation
-            nwp_dummy = tf.zeros(
-                (tf.shape(kkc_enc)[0], config.MAX_WORD_CONTEXT),
-                dtype=tf.int32
-            )
-            kkc_pred, _ = model(
+            # Align batch sizes
+            min_batch = tf.minimum(tf.shape(kkc_enc)[0], tf.shape(nwp_x)[0])
+            kkc_enc = kkc_enc[:min_batch]
+            kkc_dec_in = kkc_dec_in[:min_batch]
+            kkc_dec_tgt = kkc_dec_tgt[:min_batch]
+            nwp_x = nwp_x[:min_batch]
+            nwp_y = nwp_y[:min_batch]
+
+            # SINGLE forward pass for validation
+            kkc_pred, nwp_pred = model(
                 {
                     'encoder_input': kkc_enc,
                     'decoder_input': kkc_dec_in,
-                    'nwp_input': nwp_dummy,
-                },
-                training=False
-            )
-
-            # NWP validation
-            enc_dummy = tf.zeros(
-                (tf.shape(nwp_x)[0], config.MAX_ENCODER_LEN),
-                dtype=tf.int32
-            )
-            dec_dummy = tf.zeros(
-                (tf.shape(nwp_x)[0], config.MAX_DECODER_LEN),
-                dtype=tf.int32
-            )
-            _, nwp_pred = model(
-                {
-                    'encoder_input': enc_dummy,
-                    'decoder_input': dec_dummy,
                     'nwp_input': nwp_x,
                 },
                 training=False
@@ -339,6 +333,7 @@ def train_multitask(model, datasets, info, num_epochs=None):
             val_total_loss.update_state(total_l)
             val_kkc_acc.update_state(masked_accuracy(kkc_dec_tgt, kkc_pred))
             val_nwp_acc.update_state(nwp_y, nwp_pred)
+            val_nwp_top5.update_state(_top_k_accuracy(nwp_y, nwp_pred, k=5))
 
         # Record history
         history['loss'].append(float(epoch_total_loss.result()))
@@ -346,20 +341,30 @@ def train_multitask(model, datasets, info, num_epochs=None):
         history['nwp_loss'].append(float(epoch_nwp_loss.result()))
         history['kkc_accuracy'].append(float(epoch_kkc_acc.result()))
         history['nwp_accuracy'].append(float(epoch_nwp_acc.result()))
+        history['nwp_top5_accuracy'].append(float(epoch_nwp_top5.result()))
         history['val_loss'].append(float(val_total_loss.result()))
         history['val_kkc_loss'].append(float(val_kkc_loss.result()))
         history['val_nwp_loss'].append(float(val_nwp_loss.result()))
         history['val_kkc_accuracy'].append(float(val_kkc_acc.result()))
         history['val_nwp_accuracy'].append(float(val_nwp_acc.result()))
+        history['val_nwp_top5_accuracy'].append(float(val_nwp_top5.result()))
 
         vl = history['val_loss'][-1]
         print(
-            f"\nEpoch {epoch+1}/{num_epochs} | "
-            f"loss={history['loss'][-1]:.4f} val_loss={vl:.4f} | "
-            f"kkc_acc={history['kkc_accuracy'][-1]*100:.1f}% "
-            f"nwp_acc={history['nwp_accuracy'][-1]*100:.1f}% | "
-            f"val_kkc_acc={history['val_kkc_accuracy'][-1]*100:.1f}% "
-            f"val_nwp_acc={history['val_nwp_accuracy'][-1]*100:.1f}%"
+            f"\n✅ Epoch {epoch+1}/{num_epochs}\n"
+            f"  Train: loss={history['loss'][-1]:.4f} "
+            f"kkc_loss={history['kkc_loss'][-1]:.4f} "
+            f"nwp_loss={history['nwp_loss'][-1]:.4f}\n"
+            f"  Val:   loss={vl:.4f} "
+            f"kkc_loss={history['val_kkc_loss'][-1]:.4f} "
+            f"nwp_loss={history['val_nwp_loss'][-1]:.4f}\n"
+            f"  KKC:   acc={history['kkc_accuracy'][-1]*100:.1f}% "
+            f"val_acc={history['val_kkc_accuracy'][-1]*100:.1f}%\n"
+            f"  NWP:   acc={history['nwp_accuracy'][-1]*100:.2f}% "
+            f"top5={history['nwp_top5_accuracy'][-1]*100:.1f}% "
+            f"val_acc={history['val_nwp_accuracy'][-1]*100:.2f}% "
+            f"val_top5={history['val_nwp_top5_accuracy'][-1]*100:.1f}%",
+            flush=True
         )
 
         # Early stopping + save best
@@ -367,11 +372,11 @@ def train_multitask(model, datasets, info, num_epochs=None):
             best_val_loss = vl
             patience_counter = 0
             model.save(f'{config.MODEL_DIR}/best_multitask.keras')
-            print(f"  💾 Best model saved (val_loss={vl:.4f})")
+            print(f"  💾 Best model saved (val_loss={vl:.4f})", flush=True)
         else:
             patience_counter += 1
             if patience_counter >= patience:
-                print(f"\n⏹ Early stopping at epoch {epoch+1}")
+                print(f"\n⏹ Early stopping at epoch {epoch+1}", flush=True)
                 # Load best weights
                 model.load_weights(f'{config.MODEL_DIR}/best_multitask.keras')
                 break
@@ -382,6 +387,6 @@ def train_multitask(model, datasets, info, num_epochs=None):
             new_lr = max(old_lr * 0.5, 1e-6)
             optimizer.learning_rate.assign(new_lr)
             if new_lr != old_lr:
-                print(f"  📉 LR: {old_lr:.2e} → {new_lr:.2e}")
+                print(f"  📉 LR: {old_lr:.2e} → {new_lr:.2e}", flush=True)
 
     return history
