@@ -1,0 +1,472 @@
+"""
+Data loading and cache management for Multi-Task GRU.
+Handles loading datasets (custom JSONL or zenz fallback),
+building both KKC and NWP training arrays, and saving/loading from cache.
+"""
+import os
+import gc
+import re
+import json
+import numpy as np
+from tqdm.auto import tqdm
+
+from . import config
+from .tokenizer import (
+    tokenize_with_sep, encode_encoder_input, encode_decoder_seq,
+    tokenize_words, encode_words,
+    build_char_vocab, build_word_vocab,
+)
+
+
+# Regex to check if input contains kana (hiragana or katakana)
+_KANA_PATTERN = re.compile(r'[\u3040-\u309F\u30A0-\u30FF]')
+
+
+# ===========================================================
+# CACHE CHECK
+# ===========================================================
+
+def check_cache(cache_paths):
+    """Check if all cache files exist.
+
+    Returns:
+        (kkc_ready, nwp_ready): tuple of booleans
+    """
+    kkc_files = ['char_vocab', 'kkc_encoder', 'kkc_dec_in', 'kkc_dec_tgt']
+    nwp_files = ['nwp_vocab', 'nwp_x', 'nwp_y']
+
+    kkc_ready = all(os.path.exists(cache_paths[k]) for k in kkc_files)
+    nwp_ready = all(os.path.exists(cache_paths[k]) for k in nwp_files)
+
+    return kkc_ready, nwp_ready
+
+
+# ===========================================================
+# LOAD RAW DATASET
+# ===========================================================
+
+def load_raw_dataset(max_samples=None, source='auto'):
+    """Load training dataset.
+
+    Supports two data sources:
+    - 'custom': Load from local JSONL file (ime_dataset_10m.jsonl on Drive)
+    - 'zenz': Load from HuggingFace (Miwa-Keita/zenz-v2.5-dataset)
+    - 'auto' (default): Try custom first, fallback to zenz
+
+    Custom JSONL format (one JSON per line):
+        {"left_context": "...", "input": "かな", "output": "漢字"}
+
+    Returns:
+        list of dicts with keys: input, output, left_context, raw_kana, input_len
+    """
+    if max_samples is None:
+        max_samples = config.MAX_SAMPLES
+
+    if source == 'auto':
+        custom_path = f'{config.DATASET_DIR}/ime_dataset_10m.jsonl'
+        if os.path.exists(custom_path):
+            source = 'custom'
+            print(f"📂 Found custom dataset: {custom_path}")
+        else:
+            source = 'zenz'
+            print(f"⚠️ Custom dataset not found at {custom_path}")
+            print(f"   Falling back to zenz dataset from HuggingFace")
+
+    if source == 'custom':
+        raw_items = _load_custom_jsonl(max_samples)
+    else:
+        raw_items = _load_zenz_hf(max_samples)
+
+    # Filter and prepare
+    training_data = _filter_items(raw_items, max_samples)
+
+    # Sort by input length for bucketing (helps GRU training stability)
+    training_data.sort(key=lambda x: x['input_len'])
+    lengths = [d['input_len'] for d in training_data]
+    print(f"  Bucketed: short(1-5)={sum(1 for l in lengths if l <= 5):,}, "
+          f"med(6-15)={sum(1 for l in lengths if 5 < l <= 15):,}, "
+          f"long(16+)={sum(1 for l in lengths if l > 15):,}")
+
+    return training_data
+
+
+def _load_custom_jsonl(max_samples):
+    """Load from local JSONL file (ime_dataset_10m.jsonl).
+
+    Expected path: {DATASET_DIR}/ime_dataset_10m.jsonl
+    Each line: {"left_context": "...", "input": "かな", "output": "漢字"}
+    """
+    path = f'{config.DATASET_DIR}/ime_dataset_10m.jsonl'
+    print(f"📥 Loading custom dataset: {path}")
+
+    raw_items = []
+    with open(path, 'r', encoding='utf-8') as f:
+        for line_num, line in enumerate(tqdm(f, desc="Reading JSONL")):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                item = json.loads(line)
+                raw_items.append(item)
+            except json.JSONDecodeError:
+                continue  # Skip malformed lines
+            if len(raw_items) >= max_samples * 2:
+                # Load extra to account for filtering
+                break
+
+    print(f"  ✓ Read {len(raw_items):,} items from JSONL")
+    return raw_items
+
+
+def _load_zenz_hf(max_samples):
+    """Load from HuggingFace zenz dataset (fallback)."""
+    from datasets import load_dataset
+
+    print("📥 Loading zenz dataset from HuggingFace...")
+    dataset = load_dataset(
+        "Miwa-Keita/zenz-v2.5-dataset",
+        data_files="train_wikipedia.jsonl",
+        split="train"
+    )
+    print(f"  ✓ Raw: {len(dataset):,} items")
+
+    # Convert to list of dicts (same format as custom)
+    raw_items = []
+    for item in tqdm(dataset, desc="Processing"):
+        raw_items.append({
+            'left_context': item.get('left_context', '') or '',
+            'input': item.get('input', '') or '',
+            'output': item.get('output', '') or '',
+        })
+        if len(raw_items) >= max_samples * 2:
+            break
+
+    del dataset
+    gc.collect()
+    return raw_items
+
+
+def _filter_items(raw_items, max_samples):
+    """Filter and prepare training items.
+
+    Applies:
+    - Empty check
+    - Kana content check (input must have hiragana/katakana)
+    - Length limits
+    - Context truncation (keep last N chars)
+    """
+    training_data = []
+    skipped = {'empty': 0, 'no_kana': 0, 'too_long': 0}
+
+    for item in tqdm(raw_items, desc="Filtering"):
+        left_ctx = (item.get('left_context', '') or '').strip()
+        kana_input = (item.get('input', '') or '').strip()
+        kanji_output = (item.get('output', '') or '').strip()
+
+        # Skip empty
+        if not kana_input or not kanji_output:
+            skipped['empty'] += 1
+            continue
+
+        # Check input contains actual kana (hiragana or katakana)
+        if not _KANA_PATTERN.search(kana_input):
+            skipped['no_kana'] += 1
+            continue
+
+        # Length limits
+        if len(kana_input) > config.MAX_INPUT_LEN:
+            skipped['too_long'] += 1
+            continue
+        if len(kanji_output) > config.MAX_OUTPUT_LEN:
+            skipped['too_long'] += 1
+            continue
+
+        # Truncate context to max (keep last N chars)
+        if len(left_ctx) > config.MAX_CONTEXT_LEN:
+            left_ctx = left_ctx[-config.MAX_CONTEXT_LEN:]
+
+        # Build encoder input: context<SEP>kana
+        enc_input = f"{left_ctx}<SEP>{kana_input}" if left_ctx else f"<SEP>{kana_input}"
+
+        training_data.append({
+            'input': enc_input,
+            'output': kanji_output,
+            'left_context': left_ctx,
+            'raw_kana': kana_input,
+            'input_len': len(kana_input),
+        })
+
+        if len(training_data) >= max_samples:
+            break
+
+    print(f"  ✓ {len(training_data):,} valid training items")
+    print(f"    Skipped: empty={skipped['empty']:,}, "
+          f"no_kana={skipped['no_kana']:,}, too_long={skipped['too_long']:,}")
+
+    # Show sample data
+    print("\n📝 Sample data:")
+    for d in training_data[:5]:
+        ctx = d['left_context'][:20] or '(none)'
+        print(f"  ctx: {ctx} | {d['raw_kana']} → {d['output']}")
+
+    del raw_items
+    gc.collect()
+    return training_data
+
+
+# ===========================================================
+# BUILD KKC CACHE
+# ===========================================================
+
+def build_kkc_cache(training_data, cache_paths):
+    """Build and save KKC training arrays.
+
+    Creates:
+    - char_vocab.json: character vocabulary
+    - kkc_encoder.npy: encoder input arrays
+    - kkc_decoder_input.npy: decoder input (with BOS)
+    - kkc_decoder_target.npy: decoder target (with EOS)
+    - kkc_test_cases.json: meaningful test cases
+    """
+    print("\n🔨 Building KKC cache...")
+
+    # Build char vocabulary
+    char_to_idx, idx_to_char = build_char_vocab(training_data)
+    vocab_size = len(char_to_idx)
+    print(f"  Char vocab: {vocab_size:,} characters")
+
+    # Save vocab
+    with open(cache_paths['char_vocab'], 'w', encoding='utf-8') as f:
+        json.dump({
+            'char_to_idx': char_to_idx,
+            'idx_to_char': {str(k): v for k, v in idx_to_char.items()},
+        }, f, ensure_ascii=False)
+
+    PAD = char_to_idx['<PAD>']
+    UNK = char_to_idx['<UNK>']
+    n = len(training_data)
+
+    # Save meaningful test cases (clean, no <UNK>)
+    test_cases = []
+    for d in training_data[:5000]:
+        kana = d['raw_kana']
+        output = d['output']
+        context = d['left_context']
+
+        # Filter: all chars in vocab, meaningful conversion
+        all_kana_in_vocab = all(c in char_to_idx for c in kana)
+        all_output_in_vocab = all(c in char_to_idx for c in output)
+        all_ctx_in_vocab = all(c in char_to_idx for c in context) if context else True
+
+        # Must be a real kana→kanji conversion (output differs from input)
+        is_conversion = kana != output
+        has_good_length = 2 <= len(kana) <= 15 and 1 <= len(output) <= 15
+
+        if (all_kana_in_vocab and all_output_in_vocab and all_ctx_in_vocab
+                and is_conversion and has_good_length and len(test_cases) < 50):
+            test_cases.append({
+                'context': context,
+                'kana': kana,
+                'expected': output,
+            })
+
+    with open(cache_paths['kkc_test_cases'], 'w', encoding='utf-8') as f:
+        json.dump(test_cases, f, ensure_ascii=False, indent=2)
+    print(f"  ✓ Saved {len(test_cases)} KKC test cases")
+
+    # --- Encoder input arrays ---
+    print(f"  Encoding {n:,} samples...")
+    arr = np.zeros((n, config.MAX_ENCODER_LEN), dtype=np.int32)
+    for i, d in enumerate(tqdm(training_data, desc="Encoder")):
+        arr[i] = encode_encoder_input(d['input'], char_to_idx, PAD, UNK)
+    np.save(cache_paths['kkc_encoder'], arr)
+    del arr; gc.collect()
+
+    # --- Decoder input (with BOS) ---
+    arr = np.zeros((n, config.MAX_DECODER_LEN), dtype=np.int32)
+    for i, d in enumerate(tqdm(training_data, desc="Dec input")):
+        arr[i] = encode_decoder_seq(d['output'], char_to_idx, PAD, UNK, add_bos=True)
+    # Verify BOS is at position 0
+    assert arr[0][0] == char_to_idx['<BOS>'], f"Expected BOS, got {arr[0][0]}"
+    np.save(cache_paths['kkc_dec_in'], arr)
+    del arr; gc.collect()
+
+    # --- Decoder target (with EOS) ---
+    arr = np.zeros((n, config.MAX_DECODER_LEN), dtype=np.int32)
+    for i, d in enumerate(tqdm(training_data, desc="Dec target")):
+        arr[i] = encode_decoder_seq(d['output'], char_to_idx, PAD, UNK, add_eos=True)
+    # Verify EOS is present
+    assert char_to_idx['<EOS>'] in list(arr[0]), "Decoder target should contain EOS"
+    np.save(cache_paths['kkc_dec_tgt'], arr)
+    del arr; gc.collect()
+
+    print(f"  ✓ KKC cache saved → {cache_paths['kkc_encoder']}")
+    return char_to_idx, idx_to_char
+
+
+# ===========================================================
+# BUILD NWP CACHE
+# ===========================================================
+
+def build_nwp_cache(training_data, cache_paths):
+    """Build and save NWP training arrays.
+
+    Uses left_context + output as full sentences, then creates
+    word-level sliding window pairs: [w1,w2,w3] → w4
+
+    Creates:
+    - nwp_word_vocab.json: word vocabulary
+    - nwp_x.npy: context word arrays
+    - nwp_y.npy: target word IDs
+    - nwp_test_cases.json: meaningful test cases
+    """
+    from collections import Counter
+
+    print("\n🔨 Building NWP cache...")
+
+    # Pass 1: tokenize sentences + count words
+    print("  Pass 1: Tokenizing words...")
+    word_counts = Counter()
+    all_sentences = []
+
+    for d in tqdm(training_data, desc="Word tokenize"):
+        text = d['left_context'] + d['output']
+        if not text.strip():
+            continue
+        words = tokenize_words(text)
+        if len(words) < 3:  # Skip very short fragments
+            continue
+        word_counts.update(words)
+        all_sentences.append((words, text))
+
+    print(f"  ✓ {len(all_sentences):,} sentences, {len(word_counts):,} unique words")
+    print(f"  Top 15: {[w for w, c in word_counts.most_common(15)]}")
+
+    # Build word vocabulary
+    word_to_idx, idx_to_word = build_word_vocab(all_sentences)
+
+    # Save vocab
+    with open(cache_paths['nwp_vocab'], 'w', encoding='utf-8') as f:
+        json.dump({
+            'word_to_idx': word_to_idx,
+            'idx_to_word': {str(k): v for k, v in idx_to_word.items()},
+        }, f, ensure_ascii=False)
+
+    PAD = word_to_idx['<PAD>']
+    UNK = word_to_idx['<UNK>']
+    max_pairs = config.MAX_NWP_PAIRS
+
+    # Pass 2: create sliding window pairs
+    print(f"  Pass 2: Creating NWP pairs (max {max_pairs:,})...")
+    X = np.zeros((max_pairs, config.MAX_WORD_CONTEXT), dtype=np.int32)
+    y = np.zeros(max_pairs, dtype=np.int32)
+    pair_idx = 0
+
+    test_cases = []
+
+    for words, original_text in tqdm(all_sentences, desc="NWP pairs"):
+        if len(words) < 2:
+            continue
+
+        all_in_vocab = all(w in word_to_idx for w in words)
+
+        # Create sliding window pairs: context → next_word
+        for i in range(1, len(words)):
+            next_word = words[i]
+            if next_word not in word_to_idx:
+                continue
+            context = words[max(0, i - config.MAX_WORD_CONTEXT):i]
+            X[pair_idx] = encode_words(context, word_to_idx, PAD, UNK)
+            y[pair_idx] = word_to_idx[next_word]
+            pair_idx += 1
+            if pair_idx >= max_pairs:
+                break
+
+        # Save test case (clean sentence, >= 4 words, no punctuation target)
+        if all_in_vocab and len(words) >= 4 and len(test_cases) < 50:
+            for i in range(2, len(words)):  # Start from 3rd word
+                nw = words[i]
+                # Skip punctuation as target (we want real words)
+                if nw in ['、', '。', '・', '（', '）', '「', '」', '！', '？']:
+                    continue
+                if nw not in word_to_idx:
+                    continue
+                context = words[max(0, i - config.MAX_WORD_CONTEXT):i]
+                test_cases.append({
+                    'context': context,
+                    'expected': nw,
+                    'sentence': ''.join(words),
+                })
+                break  # One test case per sentence
+
+        if pair_idx >= max_pairs:
+            break
+
+    # Trim to actual size
+    X = X[:pair_idx]
+    y = y[:pair_idx]
+    print(f"  ✓ {pair_idx:,} NWP pairs created")
+    print(f"  Avg pairs/sentence: {pair_idx / max(len(all_sentences), 1):.1f}")
+
+    # Show sample pairs
+    print("\n📝 Sample NWP pairs:")
+    idx_to_word_local = {v: k for k, v in word_to_idx.items()}
+    for i in range(min(8, pair_idx)):
+        ctx = [idx_to_word_local.get(int(idx), '?') for idx in X[i] if idx != PAD]
+        tgt = idx_to_word_local.get(int(y[i]), '?')
+        print(f"  [{', '.join(ctx)}] → {tgt}")
+
+    # Save
+    np.save(cache_paths['nwp_x'], X)
+    np.save(cache_paths['nwp_y'], y)
+    with open(cache_paths['nwp_test_cases'], 'w', encoding='utf-8') as f:
+        json.dump(test_cases, f, ensure_ascii=False, indent=2)
+    print(f"  ✓ Saved {len(test_cases)} NWP test cases")
+
+    del X, y, all_sentences, word_counts
+    gc.collect()
+
+    return word_to_idx, idx_to_word
+
+
+# ===========================================================
+# LOAD FROM CACHE
+# ===========================================================
+
+def load_kkc_cache(cache_paths):
+    """Load KKC data from cache (memory-mapped).
+
+    Returns:
+        char_to_idx, idx_to_char, enc_mmap, dec_in_mmap, dec_tgt_mmap
+    """
+    with open(cache_paths['char_vocab'], 'r', encoding='utf-8') as f:
+        vocab_data = json.load(f)
+
+    char_to_idx = vocab_data['char_to_idx']
+    idx_to_char = {int(k): v for k, v in vocab_data['idx_to_char'].items()}
+
+    enc_mmap = np.load(cache_paths['kkc_encoder'], mmap_mode='r')
+    dec_in_mmap = np.load(cache_paths['kkc_dec_in'], mmap_mode='r')
+    dec_tgt_mmap = np.load(cache_paths['kkc_dec_tgt'], mmap_mode='r')
+
+    print(f"  ✓ KKC cache loaded: {len(enc_mmap):,} samples (mmap)")
+    return char_to_idx, idx_to_char, enc_mmap, dec_in_mmap, dec_tgt_mmap
+
+
+def load_nwp_cache(cache_paths):
+    """Load NWP data from cache (memory-mapped).
+
+    Returns:
+        word_to_idx, idx_to_word, x_mmap, y_mmap
+    """
+    with open(cache_paths['nwp_vocab'], 'r', encoding='utf-8') as f:
+        vocab_data = json.load(f)
+
+    word_to_idx = vocab_data['word_to_idx']
+    idx_to_word = {int(k): v for k, v in vocab_data['idx_to_word'].items()}
+
+    x_mmap = np.load(cache_paths['nwp_x'], mmap_mode='r')
+    y_mmap = np.load(cache_paths['nwp_y'], mmap_mode='r')
+
+    print(f"  ✓ NWP cache loaded: {len(x_mmap):,} pairs (mmap)")
+    return word_to_idx, idx_to_word, x_mmap, y_mmap
