@@ -274,10 +274,8 @@ def train_multitask(model, datasets, info, num_epochs=None):
                     config.NWP_LOSS_WEIGHT * nwp_loss
                 )
 
-            # Update weights
+            # Update weights (optimizer.clipnorm handles per-variable clipping)
             grads = tape.gradient(total_loss, model.trainable_variables)
-            # Clip gradients
-            grads, _ = tf.clip_by_global_norm(grads, 1.0)
             optimizer.apply_gradients(zip(grads, model.trainable_variables))
 
             # Track metrics
