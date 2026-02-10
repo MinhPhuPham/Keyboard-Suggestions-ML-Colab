@@ -223,8 +223,11 @@ def train_multitask(model, datasets, info, num_epochs=None):
     patience_counter = 0
     patience = 5
 
-    # Force unbuffered stdout for Colab (imported modules are buffered)
-    sys.stdout.reconfigure(line_buffering=True)
+    # Force unbuffered stdout (skip on Colab where OutStream lacks reconfigure)
+    try:
+        sys.stdout.reconfigure(line_buffering=True)
+    except AttributeError:
+        pass  # Colab/IPython OutStream — already unbuffered
 
     for epoch in range(num_epochs):
         print(f"\n{'='*60}", flush=True)
