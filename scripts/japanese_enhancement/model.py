@@ -26,7 +26,7 @@ from tensorflow.keras.models import Model
 from tensorflow.keras.layers import (
     Input, Embedding, GRU, Dense, Dropout,
     Bidirectional, Attention, Concatenate,
-    LayerNormalization, RepeatVector,
+    LayerNormalization, RepeatVector, GlobalAveragePooling1D,
 )
 
 from . import config
@@ -83,14 +83,18 @@ def build_kkc_encoder(char_vocab_size, name_prefix='kkc'):
 
     encoder_output = x  # (batch, seq_len, GRU_UNITS*2)
 
-    # Derive encoder state from last timestep of encoder output.
-    # Dense projection: (batch, GRU_UNITS*2) → (batch, GRU_UNITS*2)
-    # This replaces the broken return_state + Concatenate pattern.
+    # Derive encoder state from encoder output using pooling.
+    # GlobalAveragePooling1D is a proper Keras layer that guarantees
+    # (batch, features) output — unlike return_state or tensor slicing
+    # which break in Keras 3 / TF 2.16+ (produce 1D tensors).
+    encoder_state = GlobalAveragePooling1D(
+        name=f'{name_prefix}_enc_pool'
+    )(encoder_output)  # (batch, GRU_UNITS*2)
     encoder_state = Dense(
         config.GRU_UNITS * 2,
         activation='tanh',
         name=f'{name_prefix}_state_proj'
-    )(encoder_output[:, -1, :])  # slice last step → (batch, GRU_UNITS*2)
+    )(encoder_state)  # (batch, GRU_UNITS*2)
 
     return encoder_input, encoder_output, encoder_state, char_embedding
 
