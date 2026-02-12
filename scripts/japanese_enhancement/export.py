@@ -37,7 +37,7 @@ def save_model(model, char_to_idx, word_to_idx):
     # Config
     with open(f'{config.MODEL_DIR}/config.json', 'w') as f:
         json.dump({
-            'architecture': 'MultiTask_BiGRU_v1',
+            'architecture': model.name,
             'char_vocab_size': len(char_to_idx),
             'word_vocab_size': len(word_to_idx),
             'embedding_dim': config.EMBEDDING_DIM,
@@ -81,10 +81,16 @@ def export_tflite(model):
         size_mb = len(tflite_model) / (1024 * 1024)
         print(f"  ✓ model.tflite ({size_mb:.2f} MB)")
 
-        # FP16 quantized
-        converter.optimizations = [tf.lite.Optimize.DEFAULT]
-        converter.target_spec.supported_types = [tf.float16]
-        tflite_fp16 = converter.convert()
+        # FP16 quantized (fresh converter to avoid state leakage)
+        converter_fp16 = tf.lite.TFLiteConverter.from_keras_model(model)
+        converter_fp16.target_spec.supported_ops = [
+            tf.lite.OpsSet.TFLITE_BUILTINS,
+            tf.lite.OpsSet.SELECT_TF_OPS,
+        ]
+        converter_fp16._experimental_lower_tensor_list_ops = False
+        converter_fp16.optimizations = [tf.lite.Optimize.DEFAULT]
+        converter_fp16.target_spec.supported_types = [tf.float16]
+        tflite_fp16 = converter_fp16.convert()
         path_fp16 = f'{config.MODEL_DIR}/model_fp16.tflite'
         with open(path_fp16, 'wb') as f:
             f.write(tflite_fp16)
