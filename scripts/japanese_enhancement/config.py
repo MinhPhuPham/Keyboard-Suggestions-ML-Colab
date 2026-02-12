@@ -54,10 +54,10 @@ else:
 # ===========================================================
 CHAR_VOCAB_SIZE = 6000        # Character vocabulary
 WORD_VOCAB_SIZE = 6000        # Word vocabulary (NWP head)
-EMBEDDING_DIM = 64            # Shared char embedding
-GRU_UNITS = 128               # Bi-GRU units (output = 256)
+EMBEDDING_DIM = 128           # Shared char embedding
+GRU_UNITS = 192               # Bi-GRU units (output = 384)
 NUM_ENCODER_LAYERS = 2        # Shared encoder depth
-NUM_DECODER_LAYERS = 2        # KKC decoder depth
+NUM_DECODER_LAYERS = 3        # KKC decoder depth
 DROPOUT_RATE = 0.1            # Encoder/decoder dropout
 NWP_DENSE_UNITS = 256         # NWP head hidden dim
 NWP_DROPOUT = 0.3             # NWP head dropout
@@ -111,6 +111,7 @@ def get_cache_paths(cache_dir, suffix=''):
         'nwp_vocab': f'{cache_dir}/nwp_word_vocab{suffix}.json',
         'nwp_x': f'{cache_dir}/nwp_x{suffix}.npy',
         'nwp_y': f'{cache_dir}/nwp_y{suffix}.npy',
+        'nwp_char_x': f'{cache_dir}/nwp_char_x{suffix}.npy',  # Shared encoder
         'nwp_test_cases': f'{cache_dir}/nwp_test_cases{suffix}.json',
     }
 

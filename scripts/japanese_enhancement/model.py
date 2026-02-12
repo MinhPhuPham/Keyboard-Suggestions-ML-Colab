@@ -301,6 +301,104 @@ def build_multitask_model(char_vocab_size, word_vocab_size, strategy=None):
     return model
 
 
+# ===========================================================
+# SHARED ENCODER MODEL (v2) — True Multi-Task
+# ===========================================================
+
+def build_nwp_head_v2(encoder_output, word_vocab_size):
+    """NWP head that uses shared encoder output (v2).
+
+    Instead of a separate word embedding + BiGRU path, this head
+    reuses the shared character-level encoder output. This enables
+    true multi-task learning where both heads benefit from each other.
+
+    Architecture:
+    - Self-Attention over encoder output (find relevant chars)
+    - Concatenate + LayerNorm
+    - Context GRU (compress to single vector)
+    - Dropout → Dense(word_vocab_size, softmax)
+
+    Input:  encoder_output (batch, MAX_ENCODER_LEN, encoder_dim)
+    Output: (batch, word_vocab_size) — word probabilities
+    """
+    # Self-attention (Luong-style): learn which chars matter
+    attn_out = Attention(
+        use_scale=True,
+        name='nwp_attention'
+    )([encoder_output, encoder_output])
+
+    # Combine encoder + attention
+    combined = Concatenate(name='nwp_concat')([encoder_output, attn_out])
+    combined = LayerNormalization(name='nwp_norm')(combined)
+
+    # Context GRU: compress char sequence to single vector
+    context = GRU(
+        config.GRU_UNITS,
+        name='nwp_context_gru'
+    )(combined)
+    context = Dropout(config.NWP_DROPOUT, name='nwp_dropout')(context)
+
+    # Predict next word
+    nwp_output = Dense(
+        word_vocab_size,
+        activation='softmax',
+        name='nwp_output',
+        dtype='float32'  # FP32 for numerical stability
+    )(context)
+
+    return nwp_output
+
+
+def build_shared_multitask_model(char_vocab_size, word_vocab_size,
+                                 strategy=None):
+    """Build multi-task model with SHARED encoder (v2).
+
+    Key difference from v1: both KKC and NWP share the same
+    character-level encoder. The encoder learns from both tasks,
+    producing richer Japanese text representations.
+
+    Model has 2 inputs (not 3):
+    - encoder_input: char IDs (used by both KKC and NWP)
+    - decoder_input: char IDs (KKC decoder only)
+
+    NWP context is fed through encoder_input as char sequence
+    with <SEP> word-boundary markers.
+
+    Returns:
+        model with inputs=[encoder_input, decoder_input],
+                   outputs=[kkc_output, nwp_output]
+    """
+    def _build():
+        # Shared encoder (char-level)
+        encoder_input, encoder_output, encoder_state, char_embedding = \
+            build_kkc_encoder(char_vocab_size)
+
+        # KKC head (decoder, uses shared encoder + char_embedding)
+        decoder_input, kkc_output = build_kkc_head(
+            encoder_output, encoder_state, char_vocab_size,
+            char_embedding
+        )
+
+        # NWP head v2 (uses shared encoder output directly!)
+        nwp_output = build_nwp_head_v2(encoder_output, word_vocab_size)
+
+        # 2-input model (encoder_input shared by both tasks)
+        model = Model(
+            inputs=[encoder_input, decoder_input],
+            outputs=[kkc_output, nwp_output],
+            name='shared_multitask_v2'
+        )
+        return model
+
+    if strategy is not None:
+        with strategy.scope():
+            model = _build()
+    else:
+        model = _build()
+
+    return model
+
+
 def compile_model(model, strategy=None):
     """Compile with combined losses.
 

@@ -470,3 +470,180 @@ def load_nwp_cache(cache_paths):
 
     print(f"  ✓ NWP cache loaded: {len(x_mmap):,} pairs (mmap)")
     return word_to_idx, idx_to_word, x_mmap, y_mmap
+
+
+# ===========================================================
+# SHARED ENCODER: NWP CHAR-LEVEL CACHE (v2)
+# ===========================================================
+
+def _encode_nwp_context_chars(context_words, char_to_idx, max_len):
+    """Convert context words to char IDs with <SEP> boundary markers.
+
+    Example: ["今日", "は", "天気"] → [今_id, 日_id, SEP, は_id, SEP, 天_id, 気_id, 0, ...]
+
+    The <SEP> markers help the shared encoder learn word boundaries,
+    which is critical for NWP (next word prediction) since the target
+    is a whole word.
+
+    Args:
+        context_words: list of word strings (e.g., ["今日", "は", "天気"])
+        char_to_idx: character vocabulary mapping
+        max_len: pad/truncate to this length (= MAX_ENCODER_LEN)
+
+    Returns:
+        np.array of shape (max_len,) with char IDs
+    """
+    char_ids = []
+    for i, word in enumerate(context_words):
+        if i > 0:
+            char_ids.append(config.SEP_IDX)  # Word boundary marker
+        for ch in word:
+            char_ids.append(char_to_idx.get(ch, config.UNK_IDX))
+            if len(char_ids) >= max_len:
+                break
+        if len(char_ids) >= max_len:
+            break
+
+    result = np.zeros(max_len, dtype=np.int32)
+    n = min(len(char_ids), max_len)
+    result[:n] = char_ids[:n]
+    return result
+
+
+def build_nwp_char_cache(training_data, cache_paths, char_to_idx):
+    """Build NWP training arrays with char-level context (shared encoder v2).
+
+    Instead of word IDs as input, converts context words to character
+    sequences with <SEP> markers between words:
+        "今日<SEP>は<SEP>天気" → char IDs (same shape as KKC encoder input)
+
+    This enables the shared encoder to process both KKC and NWP data.
+
+    Creates:
+    - nwp_word_vocab.json: word vocabulary (same as v1)
+    - nwp_char_x.npy: char-level context arrays (MAX_ENCODER_LEN,)
+    - nwp_y.npy: target word IDs (same as v1)
+    - nwp_test_cases.json: test cases
+    """
+    from collections import Counter
+
+    print("\n🔨 Building NWP char cache (shared encoder v2)...")
+
+    # Pass 1: tokenize + count words
+    print("  Pass 1: Tokenizing words...")
+    word_counts = Counter()
+    all_sentences = []
+
+    for d in tqdm(training_data, desc="Word tokenize"):
+        text = d['left_context'] + d['output']
+        if not text.strip():
+            continue
+        words = tokenize_words(text)
+        if len(words) < 3:
+            continue
+        word_counts.update(words)
+        all_sentences.append((words, text))
+
+    print(f"  ✓ {len(all_sentences):,} sentences, {len(word_counts):,} unique words")
+    print(f"  Top 15: {[w for w, c in word_counts.most_common(15)]}")
+
+    # Build word vocabulary
+    word_to_idx, idx_to_word = build_word_vocab(all_sentences)
+
+    # Save vocab
+    with open(cache_paths['nwp_vocab'], 'w', encoding='utf-8') as f:
+        json.dump({
+            'word_to_idx': word_to_idx,
+            'idx_to_word': {str(k): v for k, v in idx_to_word.items()},
+        }, f, ensure_ascii=False)
+
+    max_pairs = config.MAX_NWP_PAIRS
+
+    # Pass 2: create char-level NWP pairs
+    print(f"  Pass 2: Creating NWP char pairs (max {max_pairs:,})...")
+    X = np.zeros((max_pairs, config.MAX_ENCODER_LEN), dtype=np.int32)
+    y = np.zeros(max_pairs, dtype=np.int32)
+    pair_idx = 0
+    test_cases = []
+
+    for words, original_text in tqdm(all_sentences, desc="NWP char pairs"):
+        if len(words) < 2:
+            continue
+
+        for i in range(1, len(words)):
+            next_word = words[i]
+            if next_word not in word_to_idx:
+                continue
+            context = words[max(0, i - config.MAX_WORD_CONTEXT):i]
+            X[pair_idx] = _encode_nwp_context_chars(
+                context, char_to_idx, config.MAX_ENCODER_LEN
+            )
+            y[pair_idx] = word_to_idx[next_word]
+            pair_idx += 1
+            if pair_idx >= max_pairs:
+                break
+
+        # Save test case (clean sentence, >= 4 words)
+        all_in_vocab = all(w in word_to_idx for w in words)
+        if all_in_vocab and len(words) >= 4 and len(test_cases) < 50:
+            for i in range(2, len(words)):
+                nw = words[i]
+                if nw in ['、', '。', '・', '（', '）', '「', '」', '！', '？']:
+                    continue
+                if nw not in word_to_idx:
+                    continue
+                context = words[max(0, i - config.MAX_WORD_CONTEXT):i]
+                test_cases.append({
+                    'context': context,
+                    'expected': nw,
+                    'sentence': ''.join(words),
+                })
+                break
+
+        if pair_idx >= max_pairs:
+            break
+
+    # Trim to actual size
+    X = X[:pair_idx]
+    y = y[:pair_idx]
+    print(f"  ✓ {pair_idx:,} NWP char pairs created")
+
+    # Show sample pairs
+    idx_to_char = {v: k for k, v in char_to_idx.items()}
+    idx_to_word_local = {v: k for k, v in word_to_idx.items()}
+    print("\n📝 Sample NWP char pairs (with <SEP> markers):")
+    for i in range(min(5, pair_idx)):
+        chars = [idx_to_char.get(int(c), '?') for c in X[i] if c != 0]
+        tgt = idx_to_word_local.get(int(y[i]), '?')
+        print(f"  {''.join(chars)} → {tgt}")
+
+    # Save
+    np.save(cache_paths['nwp_char_x'], X)
+    np.save(cache_paths['nwp_y'], y)
+    with open(cache_paths['nwp_test_cases'], 'w', encoding='utf-8') as f:
+        json.dump(test_cases, f, ensure_ascii=False, indent=2)
+    print(f"  ✓ Saved {len(test_cases)} NWP test cases")
+
+    del X, y, all_sentences, word_counts
+    gc.collect()
+
+    return word_to_idx, idx_to_word
+
+
+def load_nwp_char_cache(cache_paths):
+    """Load NWP char-level data from cache (shared encoder v2).
+
+    Returns:
+        word_to_idx, idx_to_word, char_x_mmap, y_mmap
+    """
+    with open(cache_paths['nwp_vocab'], 'r', encoding='utf-8') as f:
+        vocab_data = json.load(f)
+
+    word_to_idx = vocab_data['word_to_idx']
+    idx_to_word = {int(k): v for k, v in vocab_data['idx_to_word'].items()}
+
+    char_x_mmap = np.load(cache_paths['nwp_char_x'], mmap_mode='r')
+    y_mmap = np.load(cache_paths['nwp_y'], mmap_mode='r')
+
+    print(f"  ✓ NWP char cache loaded: {len(char_x_mmap):,} pairs (mmap)")
+    return word_to_idx, idx_to_word, char_x_mmap, y_mmap

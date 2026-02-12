@@ -391,3 +391,319 @@ def train_multitask(model, datasets, info, num_epochs=None):
                 print(f"  📉 LR: {old_lr:.2e} → {new_lr:.2e}", flush=True)
 
     return history
+
+
+# ===========================================================
+# SHARED ENCODER TRAINING (v2)
+# ===========================================================
+
+def create_shared_datasets(kkc_data, nwp_char_data, batch_size=None):
+    """Create TF datasets for shared encoder training.
+
+    Key difference from v1: NWP uses char-level context (same shape
+    as KKC encoder input) instead of word IDs.
+
+    Args:
+        kkc_data: (enc_mmap, dec_in_mmap, dec_tgt_mmap)
+        nwp_char_data: (char_x_mmap, y_mmap, word_to_idx)
+
+    Returns:
+        (kkc_train_ds, kkc_val_ds, nwp_train_ds, nwp_val_ds), info dict
+    """
+    if batch_size is None:
+        batch_size = config.BATCH_SIZE
+
+    enc_mmap, dec_in_mmap, dec_tgt_mmap = kkc_data
+    nwp_char_x_mmap, nwp_y_mmap, _ = nwp_char_data
+
+    n_kkc = len(enc_mmap)
+    n_nwp = len(nwp_char_x_mmap)
+
+    # Shuffle indices
+    kkc_indices = np.random.permutation(n_kkc).astype(np.int32)
+    nwp_indices = np.random.permutation(n_nwp).astype(np.int32)
+
+    kkc_train_idx = kkc_indices[:int(n_kkc * 0.9)]
+    kkc_val_idx = kkc_indices[int(n_kkc * 0.9):]
+    nwp_train_idx = nwp_indices[:int(n_nwp * 0.9)]
+    nwp_val_idx = nwp_indices[int(n_nwp * 0.9):]
+
+    def make_kkc_generator(indices):
+        def gen():
+            np.random.shuffle(indices)
+            for i in indices:
+                yield (
+                    enc_mmap[i].astype(np.int32),
+                    dec_in_mmap[i].astype(np.int32),
+                    dec_tgt_mmap[i].astype(np.int32),
+                )
+        return gen
+
+    def make_nwp_char_generator(indices):
+        """NWP generator with char-level context (same shape as encoder)."""
+        def gen():
+            np.random.shuffle(indices)
+            for i in indices:
+                yield (
+                    nwp_char_x_mmap[i].astype(np.int32),
+                    nwp_y_mmap[i].astype(np.int32),
+                )
+        return gen
+
+    # KKC dataset
+    kkc_output_sig = (
+        tf.TensorSpec(shape=(config.MAX_ENCODER_LEN,), dtype=tf.int32),
+        tf.TensorSpec(shape=(config.MAX_DECODER_LEN,), dtype=tf.int32),
+        tf.TensorSpec(shape=(config.MAX_DECODER_LEN,), dtype=tf.int32),
+    )
+    kkc_train_ds = tf.data.Dataset.from_generator(
+        make_kkc_generator(kkc_train_idx), output_signature=kkc_output_sig
+    ).repeat().batch(batch_size).prefetch(tf.data.AUTOTUNE)
+
+    kkc_val_ds = tf.data.Dataset.from_generator(
+        make_kkc_generator(kkc_val_idx), output_signature=kkc_output_sig
+    ).repeat().batch(batch_size).prefetch(tf.data.AUTOTUNE)
+
+    # NWP char-level dataset (encoder_input shape = MAX_ENCODER_LEN)
+    nwp_output_sig = (
+        tf.TensorSpec(shape=(config.MAX_ENCODER_LEN,), dtype=tf.int32),
+        tf.TensorSpec(shape=(), dtype=tf.int32),
+    )
+    nwp_train_ds = tf.data.Dataset.from_generator(
+        make_nwp_char_generator(nwp_train_idx), output_signature=nwp_output_sig
+    ).repeat().batch(batch_size).prefetch(tf.data.AUTOTUNE)
+
+    nwp_val_ds = tf.data.Dataset.from_generator(
+        make_nwp_char_generator(nwp_val_idx), output_signature=nwp_output_sig
+    ).repeat().batch(batch_size).prefetch(tf.data.AUTOTUNE)
+
+    # Steps per epoch
+    kkc_train_steps = len(kkc_train_idx) // batch_size
+    nwp_train_steps = len(nwp_train_idx) // batch_size
+    kkc_val_steps = max(1, len(kkc_val_idx) // batch_size)
+    nwp_val_steps = max(1, len(nwp_val_idx) // batch_size)
+
+    train_steps = min(kkc_train_steps, nwp_train_steps)
+    val_steps = min(kkc_val_steps, nwp_val_steps)
+
+    info = {
+        'kkc_train': len(kkc_train_idx),
+        'kkc_val': len(kkc_val_idx),
+        'nwp_train': len(nwp_train_idx),
+        'nwp_val': len(nwp_val_idx),
+        'train_steps': train_steps,
+        'val_steps': val_steps,
+    }
+
+    print(f"  KKC: train={info['kkc_train']:,}, val={info['kkc_val']:,}")
+    print(f"  NWP: train={info['nwp_train']:,}, val={info['nwp_val']:,}")
+    print(f"  Steps/epoch: {train_steps}, Val steps: {val_steps}")
+
+    return (kkc_train_ds, kkc_val_ds, nwp_train_ds, nwp_val_ds), info
+
+
+def train_shared_multitask(model, datasets, info, num_epochs=None):
+    """Custom training loop for shared encoder model (v2).
+
+    Each step does TWO forward passes through the shared encoder:
+    1. KKC data → shared encoder → KKC decoder → kkc_loss
+    2. NWP char context → shared encoder → NWP head → nwp_loss
+
+    The shared encoder gets gradients from BOTH passes, learning
+    richer Japanese representations from both tasks.
+
+    Args:
+        model: shared multitask model (2 inputs, 2 outputs)
+        datasets: (kkc_train_ds, kkc_val_ds, nwp_train_ds, nwp_val_ds)
+        info: dict with train_steps, val_steps etc.
+        num_epochs: override config.NUM_EPOCHS
+    """
+    if num_epochs is None:
+        num_epochs = config.NUM_EPOCHS
+
+    kkc_train_ds, kkc_val_ds, nwp_train_ds, nwp_val_ds = datasets
+    train_steps = info['train_steps']
+    val_steps = info['val_steps']
+
+    kkc_train_iter = iter(kkc_train_ds)
+    nwp_train_iter = iter(nwp_train_ds)
+    kkc_val_iter = iter(kkc_val_ds)
+    nwp_val_iter = iter(nwp_val_ds)
+
+    optimizer = model.optimizer
+    kkc_loss_fn = masked_sparse_ce
+    nwp_loss_fn = tf.keras.losses.SparseCategoricalCrossentropy()
+
+    history = {
+        'loss': [], 'kkc_loss': [], 'nwp_loss': [],
+        'kkc_accuracy': [], 'nwp_accuracy': [], 'nwp_top5_accuracy': [],
+        'val_loss': [], 'val_kkc_loss': [], 'val_nwp_loss': [],
+        'val_kkc_accuracy': [], 'val_nwp_accuracy': [], 'val_nwp_top5_accuracy': [],
+    }
+
+    best_val_loss = float('inf')
+    patience_counter = 0
+    patience = 5
+
+    # Force unbuffered stdout
+    try:
+        sys.stdout.reconfigure(line_buffering=True)
+    except AttributeError:
+        pass
+
+    for epoch in range(num_epochs):
+        print(f"\n{'='*60}", flush=True)
+        print(f"  Epoch {epoch+1}/{num_epochs}", flush=True)
+        print(f"{'='*60}", flush=True)
+
+        # --- Training ---
+        epoch_kkc_loss = tf.keras.metrics.Mean()
+        epoch_nwp_loss = tf.keras.metrics.Mean()
+        epoch_total_loss = tf.keras.metrics.Mean()
+        epoch_kkc_acc = tf.keras.metrics.Mean()
+        epoch_nwp_acc = tf.keras.metrics.SparseCategoricalAccuracy()
+        epoch_nwp_top5 = tf.keras.metrics.Mean()
+
+        for step in range(train_steps):
+            kkc_enc, kkc_dec_in, kkc_dec_tgt = next(kkc_train_iter)
+            nwp_enc_chars, nwp_y = next(nwp_train_iter)
+
+            with tf.GradientTape() as tape:
+                # ----- Pass 1: KKC data through shared encoder -----
+                kkc_pred, _ = model(
+                    [kkc_enc, kkc_dec_in],
+                    training=True
+                )
+                kkc_loss = kkc_loss_fn(kkc_dec_tgt, kkc_pred)
+
+                # ----- Pass 2: NWP chars through shared encoder -----
+                # Decoder gets zeros (its output is ignored)
+                nwp_batch = tf.shape(nwp_enc_chars)[0]
+                dec_dummy = tf.zeros(
+                    (nwp_batch, config.MAX_DECODER_LEN), dtype=tf.int32
+                )
+                _, nwp_pred = model(
+                    [nwp_enc_chars, dec_dummy],
+                    training=True
+                )
+                nwp_loss = nwp_loss_fn(nwp_y, nwp_pred)
+
+                # Combined loss
+                total_loss = (
+                    config.KKC_LOSS_WEIGHT * kkc_loss +
+                    config.NWP_LOSS_WEIGHT * nwp_loss
+                )
+
+            # Update weights (shared encoder gets grads from BOTH passes!)
+            grads = tape.gradient(total_loss, model.trainable_variables)
+            optimizer.apply_gradients(zip(grads, model.trainable_variables))
+
+            # Track metrics
+            epoch_kkc_loss.update_state(kkc_loss)
+            epoch_nwp_loss.update_state(nwp_loss)
+            epoch_total_loss.update_state(total_loss)
+            epoch_kkc_acc.update_state(masked_accuracy(kkc_dec_tgt, kkc_pred))
+            epoch_nwp_acc.update_state(nwp_y, nwp_pred)
+            epoch_nwp_top5.update_state(_top_k_accuracy(nwp_y, nwp_pred, k=5))
+
+            if step % 50 == 0:
+                print(
+                    f"  step {step}/{train_steps} | "
+                    f"loss={total_loss:.4f} "
+                    f"kkc={kkc_loss:.4f} nwp={nwp_loss:.4f}",
+                    flush=True
+                )
+
+        # --- Validation ---
+        val_kkc_loss = tf.keras.metrics.Mean()
+        val_nwp_loss = tf.keras.metrics.Mean()
+        val_total_loss = tf.keras.metrics.Mean()
+        val_kkc_acc = tf.keras.metrics.Mean()
+        val_nwp_acc = tf.keras.metrics.SparseCategoricalAccuracy()
+        val_nwp_top5 = tf.keras.metrics.Mean()
+
+        for _ in range(val_steps):
+            kkc_enc, kkc_dec_in, kkc_dec_tgt = next(kkc_val_iter)
+            nwp_enc_chars, nwp_y = next(nwp_val_iter)
+
+            # KKC validation
+            kkc_pred, _ = model(
+                [kkc_enc, kkc_dec_in], training=False
+            )
+            kkc_l = kkc_loss_fn(kkc_dec_tgt, kkc_pred)
+
+            # NWP validation
+            nwp_batch = tf.shape(nwp_enc_chars)[0]
+            dec_dummy = tf.zeros(
+                (nwp_batch, config.MAX_DECODER_LEN), dtype=tf.int32
+            )
+            _, nwp_pred = model(
+                [nwp_enc_chars, dec_dummy], training=False
+            )
+            nwp_l = nwp_loss_fn(nwp_y, nwp_pred)
+
+            total_l = config.KKC_LOSS_WEIGHT * kkc_l + config.NWP_LOSS_WEIGHT * nwp_l
+
+            val_kkc_loss.update_state(kkc_l)
+            val_nwp_loss.update_state(nwp_l)
+            val_total_loss.update_state(total_l)
+            val_kkc_acc.update_state(masked_accuracy(kkc_dec_tgt, kkc_pred))
+            val_nwp_acc.update_state(nwp_y, nwp_pred)
+            val_nwp_top5.update_state(_top_k_accuracy(nwp_y, nwp_pred, k=5))
+
+        # Record history
+        history['loss'].append(float(epoch_total_loss.result()))
+        history['kkc_loss'].append(float(epoch_kkc_loss.result()))
+        history['nwp_loss'].append(float(epoch_nwp_loss.result()))
+        history['kkc_accuracy'].append(float(epoch_kkc_acc.result()))
+        history['nwp_accuracy'].append(float(epoch_nwp_acc.result()))
+        history['nwp_top5_accuracy'].append(float(epoch_nwp_top5.result()))
+        history['val_loss'].append(float(val_total_loss.result()))
+        history['val_kkc_loss'].append(float(val_kkc_loss.result()))
+        history['val_nwp_loss'].append(float(val_nwp_loss.result()))
+        history['val_kkc_accuracy'].append(float(val_kkc_acc.result()))
+        history['val_nwp_accuracy'].append(float(val_nwp_acc.result()))
+        history['val_nwp_top5_accuracy'].append(float(val_nwp_top5.result()))
+
+        vl = history['val_loss'][-1]
+        print(
+            f"\n✅ Epoch {epoch+1}/{num_epochs}\n"
+            f"  Train: loss={history['loss'][-1]:.4f} "
+            f"kkc_loss={history['kkc_loss'][-1]:.4f} "
+            f"nwp_loss={history['nwp_loss'][-1]:.4f}\n"
+            f"  Val:   loss={vl:.4f} "
+            f"kkc_loss={history['val_kkc_loss'][-1]:.4f} "
+            f"nwp_loss={history['val_nwp_loss'][-1]:.4f}\n"
+            f"  KKC:   acc={history['kkc_accuracy'][-1]*100:.1f}% "
+            f"val_acc={history['val_kkc_accuracy'][-1]*100:.1f}%\n"
+            f"  NWP:   acc={history['nwp_accuracy'][-1]*100:.2f}% "
+            f"top5={history['nwp_top5_accuracy'][-1]*100:.1f}% "
+            f"val_acc={history['val_nwp_accuracy'][-1]*100:.2f}% "
+            f"val_top5={history['val_nwp_top5_accuracy'][-1]*100:.1f}%",
+            flush=True
+        )
+
+        # Early stopping + save best
+        if vl < best_val_loss:
+            best_val_loss = vl
+            patience_counter = 0
+            model.save(f'{config.MODEL_DIR}/best_shared_multitask.keras')
+            print(f"  💾 Best model saved (val_loss={vl:.4f})", flush=True)
+        else:
+            patience_counter += 1
+            if patience_counter >= patience:
+                print(f"\n⏹ Early stopping at epoch {epoch+1}", flush=True)
+                model.load_weights(
+                    f'{config.MODEL_DIR}/best_shared_multitask.keras'
+                )
+                break
+
+        # Reduce LR
+        if patience_counter >= 2:
+            old_lr = float(optimizer.learning_rate)
+            new_lr = max(old_lr * 0.5, 1e-6)
+            optimizer.learning_rate.assign(new_lr)
+            if new_lr != old_lr:
+                print(f"  📉 LR: {old_lr:.2e} → {new_lr:.2e}", flush=True)
+
+    return history
