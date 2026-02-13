@@ -247,8 +247,12 @@ def build_kkc_cache(training_data, cache_paths):
     n = len(training_data)
 
     # Save meaningful test cases (clean, no <UNK>)
+    # Data is sorted by input_len → sample from middle for meaningful conversions
+    # (short inputs at start often have kana == output, no real conversion)
+    mid = len(training_data) // 4  # Start from 25% mark
+    sample_range = training_data[mid:mid + 10000]
     test_cases = []
-    for d in training_data[:5000]:
+    for d in sample_range:
         kana = d['raw_kana']
         output = d['output']
         context = d['left_context']
