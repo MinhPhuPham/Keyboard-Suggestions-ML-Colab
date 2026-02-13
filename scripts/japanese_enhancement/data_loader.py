@@ -671,7 +671,7 @@ def build_nwp_char_cache(training_data, cache_paths, char_to_idx):
     test_cases = []
 
     import random
-    MAX_PAIRS_PER_SENTENCE = 2  # Maximize sentence diversity (7% → ~59% coverage)
+    MAX_PAIRS_PER_SENTENCE = 1  # 1 random pair per sentence → 100% coverage, halved steps
     sentences_used = 0
 
     for words, original_text in tqdm(all_sentences, desc="NWP char pairs"):
