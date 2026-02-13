@@ -250,6 +250,7 @@ def build_kkc_cache(training_data, cache_paths):
     # Data is sorted by input_len ascending. Most items are len=1 particles,
     # so scan from the END (longest inputs) to find real kana→kanji conversions.
     test_cases = []
+    debug_count = 0
     for d in reversed(training_data):
         if len(test_cases) >= 50:
             break
@@ -258,9 +259,13 @@ def build_kkc_cache(training_data, cache_paths):
         context = d['left_context']
 
         # Filter: all chars in vocab, meaningful conversion
-        all_kana_in_vocab = all(c in char_to_idx for c in kana)
-        all_output_in_vocab = all(c in char_to_idx for c in output)
-        all_ctx_in_vocab = all(c in char_to_idx for c in context) if context else True
+        kana_missing = [c for c in kana if c not in char_to_idx]
+        out_missing = [c for c in output if c not in char_to_idx]
+        ctx_missing = [c for c in context if c not in char_to_idx] if context else []
+
+        all_kana_in_vocab = len(kana_missing) == 0
+        all_output_in_vocab = len(out_missing) == 0
+        all_ctx_in_vocab = len(ctx_missing) == 0
 
         # Must be a real kana→kanji conversion (output differs from input)
         is_conversion = kana != output
@@ -273,6 +278,21 @@ def build_kkc_cache(training_data, cache_paths):
                 'kana': kana,
                 'expected': output,
             })
+        elif debug_count < 5:
+            # Show why this item was rejected
+            reasons = []
+            if not all_kana_in_vocab:
+                reasons.append(f"kana_missing={kana_missing[:3]}")
+            if not all_output_in_vocab:
+                reasons.append(f"out_missing={out_missing[:3]}")
+            if not all_ctx_in_vocab:
+                reasons.append(f"ctx_missing={ctx_missing[:3]}")
+            if not is_conversion:
+                reasons.append("kana==output")
+            if not has_good_length:
+                reasons.append(f"bad_len(kana={len(kana)},out={len(output)})")
+            print(f"    [SKIP] '{kana}'→'{output}' ctx='{context[:10]}...' | {', '.join(reasons)}")
+            debug_count += 1
 
     with open(cache_paths['kkc_test_cases'], 'w', encoding='utf-8') as f:
         json.dump(test_cases, f, ensure_ascii=False, indent=2)
