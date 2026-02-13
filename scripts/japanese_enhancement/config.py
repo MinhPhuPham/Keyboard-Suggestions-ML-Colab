@@ -87,7 +87,8 @@ SEP_TOKEN = '<SEP>'
 # TRAINING CONFIG
 # ===========================================================
 BATCH_SIZE = 512              # Per GPU — T4 (16GB) handles 512 for ~5M param GRU
-FORCE_REBUILD_CACHE = False
+FORCE_REBUILD_KKC = False     # Force rebuild KKC cache only
+FORCE_REBUILD_NWP = False     # Force rebuild NWP cache only
 PREFIX_AUG_RATIO = 0.3        # Fraction of KKC samples to augment with prefix variants
 KKC_LOSS_WEIGHT = 1.0        # KKC task weight
 NWP_LOSS_WEIGHT = 1.0        # NWP task weight (equal to KKC)

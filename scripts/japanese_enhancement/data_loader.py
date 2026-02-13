@@ -663,14 +663,29 @@ def build_nwp_char_cache(training_data, cache_paths, char_to_idx):
     pair_idx = 0
     test_cases = []
 
+    import random
+    MAX_PAIRS_PER_SENTENCE = 2  # Maximize sentence diversity (7% → ~59% coverage)
+    sentences_used = 0
+
     for words, original_text in tqdm(all_sentences, desc="NWP char pairs"):
         if len(words) < 2:
             continue
 
+        # Collect valid positions where next_word is in vocab
+        valid_positions = []
         for i in range(1, len(words)):
+            if words[i] in word_to_idx:
+                valid_positions.append(i)
+
+        if not valid_positions:
+            continue
+
+        # Randomly sample up to MAX_PAIRS_PER_SENTENCE positions
+        sampled = random.sample(valid_positions, min(MAX_PAIRS_PER_SENTENCE, len(valid_positions)))
+        sentences_used += 1
+
+        for i in sampled:
             next_word = words[i]
-            if next_word not in word_to_idx:
-                continue
             context = words[max(0, i - config.MAX_WORD_CONTEXT):i]
             X[pair_idx] = _encode_nwp_context_chars(
                 context, char_to_idx, config.MAX_ENCODER_LEN
@@ -703,7 +718,8 @@ def build_nwp_char_cache(training_data, cache_paths, char_to_idx):
     # Trim to actual size
     X = X[:pair_idx]
     y = y[:pair_idx]
-    print(f"  ✓ {pair_idx:,} NWP char pairs created")
+    coverage_pct = sentences_used / max(len(all_sentences), 1) * 100
+    print(f"  ✓ {pair_idx:,} NWP char pairs from {sentences_used:,}/{len(all_sentences):,} sentences ({coverage_pct:.1f}% coverage)")
 
     # Show sample pairs
     idx_to_char = {v: k for k, v in char_to_idx.items()}
