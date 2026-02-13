@@ -80,12 +80,6 @@ def load_raw_dataset(max_samples=None, source='auto'):
     # Filter and prepare
     training_data = _filter_items(raw_items, max_samples)
 
-    # Prefix augmentation for KKC (partial kana → full kanji)
-    # Use getattr for backward compat (Kaggle may cache old config without this attr)
-    prefix_ratio = getattr(config, 'PREFIX_AUG_RATIO', 0.3)
-    if prefix_ratio > 0:
-        training_data = _augment_with_prefixes(training_data, prefix_ratio)
-
     # Sort by input length for bucketing (helps GRU training stability)
     training_data.sort(key=lambda x: x['input_len'])
     lengths = [d['input_len'] for d in training_data]
@@ -301,6 +295,11 @@ def build_kkc_cache(training_data, cache_paths):
     - kkc_test_cases.json: meaningful test cases
     """
     print("\n🔨 Building KKC cache...")
+
+    # --- Prefix augmentation (KKC only, not NWP) ---
+    prefix_ratio = getattr(config, 'PREFIX_AUG_RATIO', 0.3)
+    if prefix_ratio > 0:
+        training_data = _augment_with_prefixes(training_data, prefix_ratio)
 
     # Build char vocabulary
     char_to_idx, idx_to_char = build_char_vocab(training_data)
