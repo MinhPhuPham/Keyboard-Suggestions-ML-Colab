@@ -655,6 +655,8 @@ def build_nwp_char_cache(training_data, cache_paths, char_to_idx):
     max_pairs = config.MAX_NWP_PAIRS
 
     # Pass 2: create char-level NWP pairs
+    # Shuffle to sample from full diversity (data is sorted by input_len)
+    np.random.shuffle(all_sentences)
     print(f"  Pass 2: Creating NWP char pairs (max {max_pairs:,})...")
     X = np.zeros((max_pairs, config.MAX_ENCODER_LEN), dtype=np.int32)
     y = np.zeros(max_pairs, dtype=np.int32)
