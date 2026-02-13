@@ -247,12 +247,12 @@ def build_kkc_cache(training_data, cache_paths):
     n = len(training_data)
 
     # Save meaningful test cases (clean, no <UNK>)
-    # Data is sorted by input_len → sample from middle for meaningful conversions
-    # (short inputs at start often have kana == output, no real conversion)
-    mid = len(training_data) // 4  # Start from 25% mark
-    sample_range = training_data[mid:mid + 10000]
+    # Data is sorted by input_len ascending. Most items are len=1 particles,
+    # so scan from the END (longest inputs) to find real kana→kanji conversions.
     test_cases = []
-    for d in sample_range:
+    for d in reversed(training_data):
+        if len(test_cases) >= 50:
+            break
         kana = d['raw_kana']
         output = d['output']
         context = d['left_context']
@@ -267,7 +267,7 @@ def build_kkc_cache(training_data, cache_paths):
         has_good_length = 2 <= len(kana) <= 15 and 1 <= len(output) <= 15
 
         if (all_kana_in_vocab and all_output_in_vocab and all_ctx_in_vocab
-                and is_conversion and has_good_length and len(test_cases) < 50):
+                and is_conversion and has_good_length):
             test_cases.append({
                 'context': context,
                 'kana': kana,
