@@ -296,12 +296,7 @@ def build_kkc_cache(training_data, cache_paths):
     """
     print("\n🔨 Building KKC cache...")
 
-    # --- Prefix augmentation (KKC only, not NWP) ---
-    prefix_ratio = getattr(config, 'PREFIX_AUG_RATIO', 0.3)
-    if prefix_ratio > 0:
-        training_data = _augment_with_prefixes(training_data, prefix_ratio)
-
-    # Build char vocabulary
+    # Build char vocabulary from ORIGINAL data (before prefix augmentation)
     char_to_idx, idx_to_char = build_char_vocab(training_data)
     vocab_size = len(char_to_idx)
     print(f"  Char vocab: {vocab_size:,} characters")
@@ -315,12 +310,12 @@ def build_kkc_cache(training_data, cache_paths):
 
     PAD = char_to_idx['<PAD>']
     UNK = char_to_idx['<UNK>']
-    n = len(training_data)
 
-    # Save meaningful test cases (clean, no <UNK>)
+    # Save meaningful test cases from ORIGINAL data (before prefix augmentation)
     # Data is sorted by input_len ascending. Most items are len=1 particles,
     # so scan from the END (longest inputs) to find real kana→kanji conversions.
     test_cases = []
+    seen_kana = set()  # Deduplicate by kana to get diverse test cases
     debug_count = 0
     for d in reversed(training_data):
         if len(test_cases) >= 50:
@@ -328,6 +323,10 @@ def build_kkc_cache(training_data, cache_paths):
         kana = d['raw_kana']
         output = d['output']
         context = d['left_context']
+
+        # Skip if we already have a test case for this kana
+        if kana in seen_kana:
+            continue
 
         # Filter: all chars in vocab, meaningful conversion
         kana_missing = [c for c in kana if c not in char_to_idx]
@@ -349,6 +348,7 @@ def build_kkc_cache(training_data, cache_paths):
                 'kana': kana,
                 'expected': output,
             })
+            seen_kana.add(kana)
         elif debug_count < 5:
             # Show why this item was rejected
             reasons = []
@@ -368,6 +368,13 @@ def build_kkc_cache(training_data, cache_paths):
     with open(cache_paths['kkc_test_cases'], 'w', encoding='utf-8') as f:
         json.dump(test_cases, f, ensure_ascii=False, indent=2)
     print(f"  ✓ Saved {len(test_cases)} KKC test cases")
+
+    # --- Prefix augmentation AFTER test cases (KKC only, not NWP) ---
+    prefix_ratio = getattr(config, 'PREFIX_AUG_RATIO', 0.3)
+    if prefix_ratio > 0:
+        training_data = _augment_with_prefixes(training_data, prefix_ratio)
+
+    n = len(training_data)
 
     # --- Encoder input arrays ---
     print(f"  Encoding {n:,} samples...")
