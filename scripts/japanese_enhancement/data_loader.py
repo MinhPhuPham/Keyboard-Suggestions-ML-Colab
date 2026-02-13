@@ -80,6 +80,10 @@ def load_raw_dataset(max_samples=None, source='auto'):
     # Filter and prepare
     training_data = _filter_items(raw_items, max_samples)
 
+    # Prefix augmentation for KKC (partial kana → full kanji)
+    if config.PREFIX_AUG_RATIO > 0:
+        training_data = _augment_with_prefixes(training_data, config.PREFIX_AUG_RATIO)
+
     # Sort by input length for bucketing (helps GRU training stability)
     training_data.sort(key=lambda x: x['input_len'])
     lengths = [d['input_len'] for d in training_data]
@@ -211,6 +215,72 @@ def _filter_items(raw_items, max_samples):
 
     del raw_items
     gc.collect()
+    return training_data
+
+
+def _augment_with_prefixes(training_data, ratio=0.3):
+    """Augment KKC data with prefix variants for partial-input prediction.
+
+    For each selected sample (e.g., あつい→暑い with context 今日はとても),
+    generates prefix variants:
+        今日はとても<SEP>あ   → 暑い  (prefix 1 char)
+        今日はとても<SEP>あつ  → 暑い  (prefix 2 chars)
+        今日はとても<SEP>あつい → 暑い  (full word — original, already in data)
+
+    Args:
+        training_data: list of training dicts from _filter_items
+        ratio: fraction of samples to augment (0.3 = 30%)
+
+    Returns:
+        training_data with prefix variants appended
+    """
+    # Only augment samples with kana length >= 2 (single chars can't have prefixes)
+    candidates = [d for d in training_data if d['input_len'] >= 2]
+    n_augment = int(len(candidates) * ratio)
+
+    if n_augment == 0:
+        print("  ⚠ No candidates for prefix augmentation")
+        return training_data
+
+    # Random sample without replacement
+    selected = np.random.choice(len(candidates), size=n_augment, replace=False)
+
+    augmented = []
+    for idx in selected:
+        d = candidates[idx]
+        kana = d['raw_kana']
+        ctx = d['left_context']
+        output = d['output']
+
+        # Generate prefix variants (all prefixes shorter than full kana)
+        for plen in range(1, len(kana)):
+            prefix = kana[:plen]
+            enc_prefix = f"{ctx}<SEP>{prefix}" if ctx else f"<SEP>{prefix}"
+            augmented.append({
+                'input': enc_prefix,
+                'output': output,
+                'left_context': ctx,
+                'raw_kana': prefix,
+                'input_len': len(prefix),
+            })
+
+    training_data.extend(augmented)
+    print(f"  ✓ Prefix augmentation: {n_augment:,} samples → {len(augmented):,} prefix variants added")
+    print(f"    Total training data: {len(training_data):,}")
+
+    # Show examples
+    print("\n📝 Prefix augmentation examples:")
+    shown = 0
+    for idx in selected[:3]:  # Show first 3 augmented samples
+        d = candidates[idx]
+        kana = d['raw_kana']
+        ctx_short = d['left_context'][:15] or '(none)'
+        print(f"  Original: {ctx_short}... | {kana} → {d['output']}")
+        for plen in range(1, len(kana)):
+            prefix = kana[:plen]
+            print(f"    prefix: {ctx_short}... | {prefix} → {d['output']}")
+        shown += 1
+
     return training_data
 
 
