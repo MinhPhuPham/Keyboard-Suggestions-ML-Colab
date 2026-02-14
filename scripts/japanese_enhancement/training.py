@@ -517,11 +517,13 @@ def train_shared_multitask(model, datasets, info, num_epochs=None):
     kkc_loss_fn = masked_sparse_ce
     nwp_loss_fn = tf.keras.losses.SparseCategoricalCrossentropy()
 
-    # Auto-detect mixed precision (FP16) and wrap optimizer for loss scaling
+    # Log mixed precision status
     use_fp16 = tf.keras.mixed_precision.global_policy().name == 'mixed_float16'
     if use_fp16:
-        optimizer = tf.keras.mixed_precision.LossScaleOptimizer(optimizer)
-        print("  🔧 Mixed precision: FP16 compute + FP32 output + loss scaling")
+        # Keras 3: no manual loss scaling needed — output layers already
+        # have dtype='float32', so losses + gradients stay in FP32 naturally.
+        # Only the forward-pass matmuls run in FP16 (via Tensor Cores).
+        print("  🔧 Mixed precision: FP16 compute + FP32 output (auto-scaled)")
 
     # Pre-create decoder dummy (reused every NWP step)
     dec_dummy_len = config.MAX_DECODER_LEN
@@ -544,13 +546,7 @@ def train_shared_multitask(model, datasets, info, num_epochs=None):
 
             total_loss = kkc_w * kkc_loss + nwp_w * nwp_loss
 
-            # FP16: scale loss UP to prevent gradient underflow in float16
-            grad_loss = optimizer.get_scaled_loss(total_loss) if use_fp16 else total_loss
-
-        grads = tape.gradient(grad_loss, model.trainable_variables)
-        # FP16: scale gradients back DOWN before applying
-        if use_fp16:
-            grads = optimizer.get_unscaled_gradients(grads)
+        grads = tape.gradient(total_loss, model.trainable_variables)
         optimizer.apply_gradients(zip(grads, model.trainable_variables))
         kkc_acc = masked_accuracy(kkc_dec_tgt, kkc_pred)
         nwp_top5 = _top_k_accuracy(nwp_y, nwp_pred, k=5)
