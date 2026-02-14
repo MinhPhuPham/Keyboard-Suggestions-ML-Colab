@@ -47,12 +47,12 @@ case "${1:-test}" in
     predict)
         echo "🔮 Running prediction test..."
         python -m scripts.japanese_enhancement.test_prediction \
-            --model-dir "${2:-./models/japanese/multitask_v2}"
+            --model-dir "${2:-./models/multitask_v2}"
         ;;
     batch)
         echo "🔮 Running batch prediction test..."
         python -m scripts.japanese_enhancement.test_prediction \
-            --model-dir "${2:-./models/japanese/multitask_v2}" --batch
+            --model-dir "${2:-./models/multitask_v2}" --batch
         ;;
     *)
         echo "Usage: ./run_test.sh [test|predict|batch] [model-dir]"

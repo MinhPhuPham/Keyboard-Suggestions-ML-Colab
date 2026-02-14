@@ -7,6 +7,7 @@ import os
 import gc
 import re
 import json
+import math
 import numpy as np
 from tqdm.auto import tqdm
 
@@ -20,6 +21,11 @@ from .tokenizer import (
 
 # Regex to check if input contains kana (hiragana or katakana)
 _KANA_PATTERN = re.compile(r'[\u3040-\u309F\u30A0-\u30FF]')
+
+# Regex to check if output contains at least 1 kanji, number, or latin letter.
+# Hiragana-only outputs (e.g., ならなくなっ) are trivial conversions that
+# waste model capacity — the model should focus on real kana→kanji pairs.
+_HAS_KANJI = re.compile(r'[\u4E00-\u9FFF\u3400-\u4DBF0-9A-Za-z]')
 
 
 # ===========================================================
@@ -152,11 +158,14 @@ def _filter_items(raw_items, max_samples):
     Applies:
     - Empty check
     - Kana content check (input must have hiragana/katakana)
+    - Kanji content check (output must contain kanji/number/letter)
+    - Minimum kana length (>= 2 chars)
     - Length limits
     - Context truncation (keep last N chars)
     """
     training_data = []
-    skipped = {'empty': 0, 'no_kana': 0, 'too_long': 0}
+    skipped = {'empty': 0, 'no_kana': 0, 'no_kanji': 0,
+               'too_short': 0, 'too_long': 0}
 
     for item in tqdm(raw_items, desc="Filtering"):
         left_ctx = (item.get('left_context', '') or '').strip()
@@ -171,6 +180,19 @@ def _filter_items(raw_items, max_samples):
         # Check input contains actual kana (hiragana or katakana)
         if not _KANA_PATTERN.search(kana_input):
             skipped['no_kana'] += 1
+            continue
+
+        # Fix 1: Output must contain at least 1 kanji, number, or letter.
+        # Hiragana-only outputs (e.g., ならなくなっ) are trivial and waste
+        # model capacity. The model should learn real kana→kanji conversions.
+        if not _HAS_KANJI.search(kanji_output):
+            skipped['no_kanji'] += 1
+            continue
+
+        # Fix 3: Minimum kana length — single-char conversions are too
+        # ambiguous (e.g., モ→もの, テ→てほんとに).
+        if len(kana_input) < 2:
+            skipped['too_short'] += 1
             continue
 
         # Length limits
@@ -201,7 +223,8 @@ def _filter_items(raw_items, max_samples):
 
     print(f"  ✓ {len(training_data):,} valid training items")
     print(f"    Skipped: empty={skipped['empty']:,}, "
-          f"no_kana={skipped['no_kana']:,}, too_long={skipped['too_long']:,}")
+          f"no_kana={skipped['no_kana']:,}, no_kanji={skipped['no_kanji']:,}, "
+          f"too_short={skipped['too_short']:,}, too_long={skipped['too_long']:,}")
 
     # Show sample data
     print("\n📝 Sample data:")
@@ -217,11 +240,16 @@ def _filter_items(raw_items, max_samples):
 def _augment_with_prefixes(training_data, ratio=0.3):
     """Augment KKC data with prefix variants for partial-input prediction.
 
-    For each selected sample (e.g., あつい→暑い with context 今日はとても),
-    generates prefix variants:
-        今日はとても<SEP>あ   → 暑い  (prefix 1 char)
-        今日はとても<SEP>あつ  → 暑い  (prefix 2 chars)
-        今日はとても<SEP>あつい → 暑い  (full word — original, already in data)
+    Fix 2: Output is TRUNCATED proportionally to prefix length.
+    This prevents training the model to hallucinate full output from
+    short prefixes (which caused repeating-character decoder loops).
+
+    For each selected sample (e.g., ジム・エイギョウ→事務・営業),
+    generates prefix variants with proportional output:
+        <SEP>ジ      → 事      (prefix 1/7 → output 1/5)
+        <SEP>ジム    → 事務    (prefix 2/7 → output 2/5)
+        <SEP>ジム・  → 事務・  (prefix 3/7 → output 3/5)
+        etc.
 
     Args:
         training_data: list of training dicts from _filter_items
@@ -230,8 +258,8 @@ def _augment_with_prefixes(training_data, ratio=0.3):
     Returns:
         training_data with prefix variants appended
     """
-    # Only augment samples with kana length >= 2 (single chars can't have prefixes)
-    candidates = [d for d in training_data if d['input_len'] >= 2]
+    # Only augment samples with kana length >= 3 (need room for meaningful prefixes)
+    candidates = [d for d in training_data if d['input_len'] >= 3]
     n_augment = int(len(candidates) * ratio)
 
     if n_augment == 0:
@@ -247,14 +275,21 @@ def _augment_with_prefixes(training_data, ratio=0.3):
         kana = d['raw_kana']
         ctx = d['left_context']
         output = d['output']
+        kana_len = len(kana)
+        out_len = len(output)
 
-        # Generate prefix variants (all prefixes shorter than full kana)
-        for plen in range(1, len(kana)):
+        # Generate prefix variants with proportionally truncated output.
+        # Start from prefix length 2 (single chars are too ambiguous).
+        for plen in range(2, kana_len):
             prefix = kana[:plen]
+            # Proportional output length: ceil(out_len * plen / kana_len)
+            output_prefix_len = max(1, math.ceil(out_len * plen / kana_len))
+            truncated_output = output[:output_prefix_len]
+
             enc_prefix = f"{ctx}<SEP>{prefix}" if ctx else f"<SEP>{prefix}"
             augmented.append({
                 'input': enc_prefix,
-                'output': output,
+                'output': truncated_output,
                 'left_context': ctx,
                 'raw_kana': prefix,
                 'input_len': len(prefix),
@@ -264,18 +299,18 @@ def _augment_with_prefixes(training_data, ratio=0.3):
     print(f"  ✓ Prefix augmentation: {n_augment:,} samples → {len(augmented):,} prefix variants added")
     print(f"    Total training data: {len(training_data):,}")
 
-    # Show examples
-    print("\n📝 Prefix augmentation examples:")
-    shown = 0
-    for idx in selected[:3]:  # Show first 3 augmented samples
+    # Show examples with proportional output
+    print("\n📝 Prefix augmentation examples (proportional output):")
+    for idx in selected[:3]:
         d = candidates[idx]
         kana = d['raw_kana']
+        output = d['output']
         ctx_short = d['left_context'][:15] or '(none)'
-        print(f"  Original: {ctx_short}... | {kana} → {d['output']}")
-        for plen in range(1, len(kana)):
+        print(f"  Original: {ctx_short}... | {kana} → {output}")
+        for plen in range(2, len(kana)):
             prefix = kana[:plen]
-            print(f"    prefix: {ctx_short}... | {prefix} → {d['output']}")
-        shown += 1
+            opl = max(1, math.ceil(len(output) * plen / len(kana)))
+            print(f"    prefix: {ctx_short}... | {prefix} → {output[:opl]}")
 
     return training_data
 
@@ -473,11 +508,14 @@ def build_nwp_cache(training_data, cache_paths):
         all_in_vocab = all(w in word_to_idx for w in words)
 
         # Create sliding window pairs: context → next_word
+        # Fix 4: Require at least 2 context words for meaningful signal
         for i in range(1, len(words)):
             next_word = words[i]
             if next_word not in word_to_idx:
                 continue
             context = words[max(0, i - config.MAX_WORD_CONTEXT):i]
+            if len(context) < 2:
+                continue  # Skip ultra-short context
             X[pair_idx] = encode_words(context, word_to_idx, PAD, UNK)
             y[pair_idx] = word_to_idx[next_word]
             pair_idx += 1
@@ -679,10 +717,13 @@ def build_nwp_char_cache(training_data, cache_paths, char_to_idx):
             continue
 
         # Collect valid positions where next_word is in vocab
+        # Fix 4: Require at least 2 context words for meaningful signal
         valid_positions = []
         for i in range(1, len(words)):
             if words[i] in word_to_idx:
-                valid_positions.append(i)
+                context = words[max(0, i - config.MAX_WORD_CONTEXT):i]
+                if len(context) >= 2:
+                    valid_positions.append(i)
 
         if not valid_positions:
             continue
@@ -702,7 +743,7 @@ def build_nwp_char_cache(training_data, cache_paths, char_to_idx):
             if pair_idx >= max_pairs:
                 break
 
-        # Save test case (clean sentence, >= 4 words)
+        # Save test case (clean sentence, >= 4 words, >= 2 context words)
         all_in_vocab = all(w in word_to_idx for w in words)
         if all_in_vocab and len(words) >= 4 and len(test_cases) < 50:
             for i in range(2, len(words)):
@@ -712,6 +753,8 @@ def build_nwp_char_cache(training_data, cache_paths, char_to_idx):
                 if nw not in word_to_idx:
                     continue
                 context = words[max(0, i - config.MAX_WORD_CONTEXT):i]
+                if len(context) < 2:
+                    continue  # Fix 4: Skip ultra-short context
                 test_cases.append({
                     'context': context,
                     'expected': nw,

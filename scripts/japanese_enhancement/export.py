@@ -4,6 +4,7 @@ Save Keras model, vocabularies, config, and export TFLite.
 """
 import os
 import json
+import shutil
 import tensorflow as tf
 
 from . import config
@@ -54,6 +55,29 @@ def save_model(model, char_to_idx, word_to_idx):
             'heads': ['kkc', 'nwp'],
         }, f, indent=2)
     print("  ✓ config.json")
+
+    # Copy test cases from CACHE_DIR → MODEL_DIR so batch tests can find them
+    copy_test_cases()
+
+
+def copy_test_cases():
+    """Copy test case files from CACHE_DIR to MODEL_DIR.
+
+    data_loader saves test cases to CACHE_DIR during cache building,
+    but test_prediction.py reads them from MODEL_DIR. This function
+    bridges that gap by copying the files after export.
+    """
+    cache_paths = config.get_cache_paths(config.CACHE_DIR, config.CACHE_SUFFIX)
+    copied = 0
+    for key in ['kkc_test_cases', 'nwp_test_cases']:
+        src = cache_paths.get(key, '')
+        if src and os.path.exists(src):
+            dst = os.path.join(config.MODEL_DIR, os.path.basename(src))
+            shutil.copy2(src, dst)
+            print(f"  ✓ {os.path.basename(src)} → MODEL_DIR")
+            copied += 1
+    if copied == 0:
+        print("  ⚠ No test case files found in CACHE_DIR to copy")
 
 
 def export_tflite(model):

@@ -35,6 +35,8 @@ class BiGRUKeyboardTester:
         print(f"Loading BiGRU model from: {model_dir}")
         print("=" * 60)
 
+        self._model_dir = model_dir
+
         start_time = time.time()
 
         if not os.path.exists(model_dir):
@@ -150,7 +152,10 @@ class BiGRUKeyboardTester:
         """Convert kana to kanji using greedy decoding.
 
         Uses encoder-decoder with attention to convert hiragana to kanji.
-        Returns top-k candidates by beam search (simplified).
+        Returns top-k candidates from first position.
+
+        Optimized: uses model() direct call (~5x faster than model.predict())
+        and early stopping on character repetition.
         """
         tf = _lazy_import_tf()
         start_time = time.time()
@@ -161,24 +166,36 @@ class BiGRUKeyboardTester:
         else:
             enc_text = f"<SEP>{kana_input}"
         enc_input = self._encode_encoder_input(enc_text)
-        enc_batch = np.expand_dims(enc_input, 0)  # (1, encoder_len)
+        enc_batch = tf.constant(np.expand_dims(enc_input, 0))  # (1, encoder_len)
 
         # Greedy decode: start with <BOS>, predict one char at a time
         dec_input = np.zeros((1, self.max_decoder_len), dtype=np.int32)
         dec_input[0, 0] = self.BOS
 
         result_chars = []
+        repeat_count = 0
+        last_char_id = -1
 
         for step in range(1, self.max_decoder_len):
-            kkc_pred, _ = self.model.predict(
-                [enc_batch, dec_input], verbose=0
+            # Direct call is ~5x faster than model.predict() (avoids Python overhead)
+            kkc_pred, _ = self.model(
+                [enc_batch, tf.constant(dec_input)], training=False
             )
             # kkc_pred: (1, decoder_len, char_vocab_size)
-            next_probs = kkc_pred[0, step - 1, :]
+            next_probs = kkc_pred[0, step - 1, :].numpy()
             next_char_id = int(np.argmax(next_probs))
 
             if next_char_id == self.EOS or next_char_id == self.PAD:
                 break
+
+            # Repetition detection: stop if same char predicted 3+ times
+            if next_char_id == last_char_id:
+                repeat_count += 1
+                if repeat_count >= 3:
+                    break
+            else:
+                repeat_count = 0
+            last_char_id = next_char_id
 
             char = self.idx_to_char.get(next_char_id, '?')
             result_chars.append((char, float(next_probs[next_char_id])))
@@ -191,11 +208,15 @@ class BiGRUKeyboardTester:
         conversion = ''.join(c for c, _ in result_chars)
         avg_prob = np.mean([p for _, p in result_chars]) * 100 if result_chars else 0
 
-        # Get top-k alternatives from first position
-        dec_first = np.zeros((1, self.max_decoder_len), dtype=np.int32)
-        dec_first[0, 0] = self.BOS
-        kkc_pred, _ = self.model.predict([enc_batch, dec_first], verbose=0)
-        first_probs = kkc_pred[0, 0, :]
+        # Get top-k alternatives from first position (reuse last prediction if step==1)
+        if len(result_chars) == 0:
+            dec_first = np.zeros((1, self.max_decoder_len), dtype=np.int32)
+            dec_first[0, 0] = self.BOS
+            kkc_pred, _ = self.model(
+                [enc_batch, tf.constant(dec_first)], training=False
+            )
+        # Use step=0 predictions from the first forward pass
+        first_probs = kkc_pred[0, 0, :].numpy()
         top_indices = np.argsort(first_probs)[-top_k * 2:][::-1]
 
         alternatives = []
@@ -230,15 +251,15 @@ class BiGRUKeyboardTester:
 
         # Encode context words as char IDs with <SEP> markers
         enc_input = self._encode_nwp_context(words)
-        enc_batch = np.expand_dims(enc_input, 0)
+        enc_batch = tf.constant(np.expand_dims(enc_input, 0))
 
         # Dummy decoder input (NWP doesn't use it, but model needs 2 inputs)
-        dec_dummy = np.zeros((1, self.max_decoder_len), dtype=np.int32)
+        dec_dummy = tf.constant(np.zeros((1, self.max_decoder_len), dtype=np.int32))
 
-        # Forward pass
-        _, nwp_pred = self.model.predict([enc_batch, dec_dummy], verbose=0)
+        # Direct call (~5x faster than model.predict())
+        _, nwp_pred = self.model([enc_batch, dec_dummy], training=False)
         # nwp_pred: (1, word_vocab_size)
-        probs = nwp_pred[0]
+        probs = nwp_pred[0].numpy()
 
         # Get top-k predictions
         top_indices = np.argsort(probs)[-top_k * 2:][::-1]
@@ -261,60 +282,127 @@ class BiGRUKeyboardTester:
     # ========================================
 
     def run_batch_test(self):
-        """Run predefined test cases for both KKC and NWP."""
+        """Run batch test using JSON test cases from model directory."""
         print("\n🧪 Running batch tests...")
         print("=" * 60)
 
-        # --- KKC Tests ---
-        print("\n📝 KKC: Kana → Kanji Conversion")
-        print("-" * 40)
-        kkc_tests = [
-            ("きょう", ""),
-            ("ありがとう", ""),
-            ("おはよう", ""),
-            ("にほん", ""),
-            ("とうきょう", ""),
-            ("がっこう", ""),
-            ("せんせい", ""),
-            ("しごと", ""),
-            ("でんしゃ", ""),
-            ("てんき", "今日は"),
-        ]
+        tf = _lazy_import_tf()
 
-        for kana, ctx in kkc_tests:
-            conversion, prob, alts, ms = self.convert_kana_to_kanji(
-                kana, context=ctx, top_k=3
-            )
-            ctx_str = f" [ctx: {ctx}]" if ctx else ""
-            print(f"  {kana}{ctx_str} → {conversion} ({prob:.1f}%)"
-                  f"  [{', '.join(a for a, _ in alts[:3])}]"
-                  f"  {ms:.0f}ms")
+        # Use model directory stored at init time
+        model_dir = self._model_dir
+
+        # --- KKC Tests ---
+        kkc_file = os.path.join(model_dir, 'kkc_test_cases_test.json')
+        print(f"\n📝 KKC: Kana → Kanji Conversion")
+        print("-" * 60)
+
+        kkc_correct = 0
+        kkc_total = 0
+
+        if os.path.exists(kkc_file):
+            with open(kkc_file, 'r', encoding='utf-8') as f:
+                kkc_cases = json.load(f)
+            print(f"  Loaded {len(kkc_cases)} test cases from {os.path.basename(kkc_file)}\n")
+
+            for i, case in enumerate(kkc_cases, 1):
+                kana = case['kana']
+                expected = case['expected']
+                ctx = case.get('context', '')
+
+                conversion, prob, alts, ms = self.convert_kana_to_kanji(
+                    kana, context=ctx, top_k=3
+                )
+
+                # Check if prediction matches expected
+                match = conversion == expected
+                if match:
+                    kkc_correct += 1
+                kkc_total += 1
+
+                icon = "✅" if match else "❌"
+                ctx_short = ctx[-15:] if len(ctx) > 15 else ctx
+                ctx_str = f" [ctx: ...{ctx_short}]" if ctx else ""
+
+                print(f"  {icon} {i:2d}. {kana[:12]:12s}{ctx_str}")
+                print(f"       Expected: {expected}")
+                print(f"       Got:      {conversion} ({prob:.1f}%)  {ms:.0f}ms")
+                if not match:
+                    alt_str = ', '.join(a for a, _ in alts[:3])
+                    print(f"       Alt:      [{alt_str}]")
+                print()
+        else:
+            print(f"  ⚠ {kkc_file} not found, skipping KKC tests")
 
         # --- NWP Tests ---
+        nwp_file = os.path.join(model_dir, 'nwp_test_cases_test.json')
         print(f"\n📝 NWP: Next Word Prediction")
+        print("-" * 60)
+
+        nwp_correct = 0
+        nwp_top5 = 0
+        nwp_total = 0
+
+        if os.path.exists(nwp_file):
+            with open(nwp_file, 'r', encoding='utf-8') as f:
+                nwp_cases = json.load(f)
+            print(f"  Loaded {len(nwp_cases)} test cases from {os.path.basename(nwp_file)}\n")
+
+            for i, case in enumerate(nwp_cases, 1):
+                context_words = case['context']
+                expected = case['expected']
+                sentence = case.get('sentence', '')
+
+                # Encode context words directly (they're already tokenized)
+                enc_input = self._encode_nwp_context(context_words)
+                enc_batch = tf.constant(np.expand_dims(enc_input, 0))
+                dec_dummy = tf.constant(np.zeros((1, self.max_decoder_len), dtype=np.int32))
+
+                start_time = time.time()
+                _, nwp_pred = self.model([enc_batch, dec_dummy], training=False)
+                ms = (time.time() - start_time) * 1000
+
+                probs = nwp_pred[0].numpy()
+                top_indices = np.argsort(probs)[-5:][::-1]
+
+                predictions = []
+                for idx in top_indices:
+                    word = self.idx_to_word.get(int(idx), None)
+                    if word and word not in ['<PAD>', '<UNK>', '<BOS>', '<EOS>']:
+                        predictions.append((word, float(probs[idx]) * 100))
+
+                # Check accuracy
+                pred_words = [w for w, _ in predictions]
+                top1_match = pred_words[0] == expected if pred_words else False
+                top5_match = expected in pred_words
+                if top1_match:
+                    nwp_correct += 1
+                if top5_match:
+                    nwp_top5 += 1
+                nwp_total += 1
+
+                icon = "✅" if top1_match else ("🔶" if top5_match else "❌")
+                ctx_str = " ".join(context_words)
+
+                pred_str = ", ".join(f"{w}({p:.1f}%)" for w, p in predictions[:5])
+                print(f"  {icon} {i:2d}. [{ctx_str}] → expected: {expected}")
+                print(f"       Got: {pred_str}  {ms:.0f}ms")
+                print()
+        else:
+            print(f"  ⚠ {nwp_file} not found, skipping NWP tests")
+
+        # --- Summary ---
+        print("=" * 60)
+        print("📊 RESULTS SUMMARY")
         print("-" * 40)
-        nwp_tests = [
-            "ありがとう",
-            "お願い",
-            "今日は天気が",
-            "東京に",
-            "日本の",
-            "よろしく",
-            "すみません",
-            "おはよう",
-            "明日は",
-            "私は",
-        ]
-
-        for ctx in nwp_tests:
-            preds, probs, ms = self.predict_next_word(ctx, top_k=5)
-            pred_str = ", ".join(
-                f"{w}({p:.1f}%)" for w, p in zip(preds[:5], probs[:5])
-            )
-            print(f"  {ctx} → {pred_str}  {ms:.0f}ms")
-
-        print(f"\n{'=' * 60}")
-        print("✅ Batch test complete")
+        if kkc_total > 0:
+            print(f"  KKC: {kkc_correct}/{kkc_total} exact match"
+                  f" ({kkc_correct/kkc_total*100:.1f}%)")
+        if nwp_total > 0:
+            print(f"  NWP: {nwp_correct}/{nwp_total} top-1"
+                  f" ({nwp_correct/nwp_total*100:.1f}%)"
+                  f"  |  {nwp_top5}/{nwp_total} top-5"
+                  f" ({nwp_top5/nwp_total*100:.1f}%)")
+        print("=" * 60)
 
     # ========================================
     # Interactive Mode
